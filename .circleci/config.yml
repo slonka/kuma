@@ -319,6 +319,10 @@ jobs:
                   EOF
                   sudo service docker restart
       - run:
+          name: Check out previous test metadata
+          command: |
+            cat "${CIRCLE_INTERNAL_TASK_DATA}/circle-test-results/results.json" | jq .
+      - run:
           name: "Run E2E tests"
           command: |
             if [[ "<< parameters.k8sVersion >>" == "kindIpv6" ]]; then
