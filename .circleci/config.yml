@@ -342,7 +342,7 @@ jobs:
             fi
 
             if [[ "<< parameters.target >>" == "test/e2e" ]]; then
-              export E2E_PKG_LIST=${E2E_PKG_LIST:-$(circleci tests glob ./test/e2e/* | circleci tests split --split-by=timings --timings-type=classname --time-default=900s | xargs printf "./%s/... ")}
+              export E2E_PKG_LIST=${E2E_PKG_LIST:-$(circleci tests glob ./test/e2e/* | circleci tests split --split-by=timings --timings-type=classname --time-default=500s | xargs printf "./%s/... ")}
             fi
             env
             make ${MAKE_PARAMETERS} << parameters.target >>
