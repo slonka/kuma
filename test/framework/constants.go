@@ -31,6 +31,6 @@ const (
 	maxClusters = 4
 
 	redirectPortInbound   = "15006"
-	redirectPortInboundV6 = "15010"
+	redirectPortInboundV6 = "15006"
 	redirectPortOutbound  = "15001"
 )

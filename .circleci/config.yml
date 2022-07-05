@@ -259,31 +259,6 @@ jobs:
       name: vm-<< parameters.arch >>
     parallelism: << parameters.parallelism >>
     steps:
-      - run:
-          # This works around circleci limitation by skipping tests for combinations that don't make sense
-          # See: https://discuss.circleci.com/t/matrix-exclude-entire-subset/43879
-          name: "Check if skip"
-          command: |
-            echo "Running with: \
-              k8s:<< parameters.k8sVersion >> \
-              target:<< parameters.target >> \
-              parallelism:<< parameters.parallelism >> \
-              arch:<< parameters.arch >> \
-            "
-            function skip() {
-              echo "Non valid job combination halting job reason: $1"
-              circleci-agent step halt
-              exit 0
-            }
-            if [[ "<< parameters.k8sVersion >>" == "kind" && "<< parameters.target >>" != "test/e2e-universal" ]]; then
-              skip "kind should only be used when testing ipv6 or with test/e2e-universal"
-            fi
-            if [[ "<< pipeline.git.branch >>" != "master" && "<< pipeline.git.branch >>" != "release-"* ]]; then
-              if [[ "<< parameters.k8sVersion >>" == "kindIpv6" || "<< parameters.k8sVersion >>" == "v1.19.16-k3s1" || "<< parameters.arch >>" == "arm64" ]]; then
-                skip "Not running tests on PRs with kindIpv6, oldK8s and arm64"
-              fi
-            fi
-            echo "Continuing tests"
       - install_build_tools:
           go_arch: << parameters.arch >>
       - checkout
@@ -437,58 +412,58 @@ workflows:
           matrix:
             alias: go_cache
             parameters:
-              executor: [ golang, vm-amd64, vm-arm64 ]
-      - check:
-          requires: [ go_cache ]
+              executor: [ golang, vm-amd64 ]
+      # - check:
+      #     requires: [ go_cache ]
       - build:
           name: build-<< matrix.arch >>
           matrix:
             alias: build
             parameters:
-              arch: [ amd64, arm64 ]
+              arch: [ amd64 ]
           requires: [ go_cache-golang ]
-      - test:
-          name: test-<< matrix.arch >>
-          matrix:
-            alias: test
-            parameters:
-              arch: [ amd64, arm64 ]
-          requires: [ check ]
+      # - test:
+      #     name: test-<< matrix.arch >>
+      #     matrix:
+      #       alias: test
+      #       parameters:
+      #         arch: [ amd64, arm64 ]
+      #     requires: [ check ]
       - e2e:
           name: test/e2e-legacy-k8s:<< matrix.arch >>-<< matrix.k8sVersion >>
           matrix:
             alias: test/e2e-legacy
             parameters:
-              k8sVersion: [ v1.19.16-k3s1, v1.21.7-k3s1, kind, kindIpv6 ]
-              arch: [ amd64, arm64 ]
+              k8sVersion: [ kindIpv6 ]
+              arch: [ amd64 ]
           parallelism: 8
           target: test/e2e
-          requires: [ build-<< matrix.arch >>, check ]
-      - e2e:
-          name: << matrix.target >>:<< matrix.arch >>-<< matrix.k8sVersion >>
-          matrix:
-            alias: test/e2e
-            parameters:
-              k8sVersion: [ v1.19.16-k3s1, v1.21.7-k3s1, kind, kindIpv6 ]
-              target: [ test/e2e-kubernetes, test/e2e-universal, test/e2e-multizone ]
-              arch: [ amd64, arm64 ]
-          parallelism: 1
-          requires: [ build-<< matrix.arch >>, check ]
-      - release:
-          # publish artifacts speculatively for normal commits
-          filters: # only on master and release-* branches (never on PRs and tags)
-            branches:
-              only:
-                - master
-                - /^release-.*/
-            tags:
-              ignore: /.*/
-          requires: [ build ]
-      - release:
-          # only publish tagged artifacts if everything passes
-          filters: # only on tags
-            branches:
-              ignore: /.*/
-            tags:
-              only: /.*/
-          requires: [ dev, test, test/e2e, test/e2e-legacy ]
+          requires: [ build-<< matrix.arch >> ]
+      # - e2e:
+      #     name: << matrix.target >>:<< matrix.arch >>-<< matrix.k8sVersion >>
+      #     matrix:
+      #       alias: test/e2e
+      #       parameters:
+      #         k8sVersion: [ v1.19.16-k3s1, v1.21.7-k3s1, kind, kindIpv6 ]
+      #         target: [ test/e2e-kubernetes, test/e2e-universal, test/e2e-multizone ]
+      #         arch: [ amd64, arm64 ]
+      #     parallelism: 1
+      #     requires: [ build-<< matrix.arch >>, check ]
+      # - release:
+      #     # publish artifacts speculatively for normal commits
+      #     filters: # only on master and release-* branches (never on PRs and tags)
+      #       branches:
+      #         only:
+      #           - master
+      #           - /^release-.*/
+      #       tags:
+      #         ignore: /.*/
+      #     requires: [ build ]
+      # - release:
+      #     # only publish tagged artifacts if everything passes
+      #     filters: # only on tags
+      #       branches:
+      #         ignore: /.*/
+      #       tags:
+      #         only: /.*/
+      #     requires: [ dev, test, test/e2e, test/e2e-legacy ]

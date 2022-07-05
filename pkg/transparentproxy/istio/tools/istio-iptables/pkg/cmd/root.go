@@ -214,7 +214,7 @@ func bindFlags(cmd *cobra.Command, args []string) {
 
 	envoyPort := "15001"
 	inboundPort := "15006"
-	inboundPortV6 := "15010"
+	inboundPortV6 := "15006"
 	inboundTunnelPort := "15008"
 
 	if err := viper.BindPFlag(constants.EnvoyPort, cmd.Flags().Lookup(constants.EnvoyPort)); err != nil {
@@ -363,7 +363,7 @@ func init() {
 		"Port to which all inbound TCP traffic to the pod/VM should be redirected to (default $INBOUND_CAPTURE_PORT = 15006)")
 
 	rootCmd.Flags().StringP(constants.InboundCapturePortV6, "y", "",
-		"Port to which all inbound TCP traffic to the pod/VM should be redirected to (default $INBOUND_CAPTURE_PORT_V6 = 15010)")
+		"Port to which all inbound TCP traffic to the pod/VM should be redirected to (default $INBOUND_CAPTURE_PORT_V6 = 15006)")
 
 	rootCmd.Flags().StringP(constants.InboundTunnelPort, "e", "",
 		"Specify the istio tunnel port for inbound tcp traffic (default $INBOUND_TUNNEL_PORT = 15008)")

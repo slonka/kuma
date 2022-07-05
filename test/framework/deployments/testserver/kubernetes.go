@@ -186,6 +186,7 @@ func (k *k8SDeployment) podSpec() corev1.PodTemplateSpec {
 			},
 		},
 	}
+	spec.ObjectMeta.Annotations["kuma.io/transparent-proxying-inbound-v6-port"] = "15006"
 	if len(k.opts.ReachableServices) > 0 {
 		spec.ObjectMeta.Annotations["kuma.io/transparent-proxying-reachable-services"] = strings.Join(k.opts.ReachableServices, ",")
 	}

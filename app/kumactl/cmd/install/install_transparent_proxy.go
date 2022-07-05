@@ -51,7 +51,7 @@ func newInstallTransparentProxy() *cobra.Command {
 		RedirectPortOutBound:               "15001",
 		RedirectInbound:                    true,
 		RedirectPortInBound:                "15006",
-		RedirectPortInBoundV6:              "15010",
+		RedirectPortInBoundV6:              "15006",
 		ExcludeInboundPorts:                "",
 		ExcludeOutboundPorts:               "",
 		UID:                                "",

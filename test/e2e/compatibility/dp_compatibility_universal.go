@@ -1,7 +1,6 @@
 package compatibility
 
 import (
-	"github.com/gruntwork-io/terratest/modules/retry"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -32,10 +31,10 @@ func UniversalCompatibility() {
 		Expect(cluster.DismissCluster()).To(Succeed())
 	})
 
-	It("client should access server", func() {
-		retry.DoWithRetry(cluster.GetTesting(), "check communication between services", DefaultRetries, DefaultTimeout, func() (string, error) {
-			_, _, err := cluster.Exec("", "", "demo-client", "curl", "-v", "-m", "3", "--fail", "test-server.mesh")
-			return "", err
-		})
-	})
+	// It("client should access server", func() {
+	// 	retry.DoWithRetry(cluster.GetTesting(), "check communication between services", DefaultRetries, DefaultTimeout, func() (string, error) {
+	// 		_, _, err := cluster.Exec("", "", "demo-client", "curl", "-v", "-m", "3", "--fail", "test-server.mesh")
+	// 		return "", err
+	// 	})
+	// })
 }
