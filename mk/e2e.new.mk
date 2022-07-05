@@ -30,7 +30,7 @@ E2E_PKG_LIST ?= $(ALL_TESTS)
 KUBE_E2E_PKG_LIST ?= ./test/e2e_env/kubernetes
 UNIVERSAL_E2E_PKG_LIST ?= ./test/e2e_env/universal
 MULTIZONE_E2E_PKG_LIST ?= ./test/e2e_env/multizone
-GINKGO_E2E_TEST_FLAGS ?= --junit-report results.xml
+GINKGO_E2E_TEST_FLAGS ?=
 GINKGO_TEST_E2E=$(GINKGO_TEST) -v --slow-spec-threshold 30s $(GINKGO_E2E_TEST_FLAGS)
 
 ifdef K3D

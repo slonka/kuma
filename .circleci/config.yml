@@ -346,6 +346,17 @@ jobs:
             fi
             env
             make ${MAKE_PARAMETERS} << parameters.target >>
+      - run:
+          name: "Correct classname on e2e test results"
+          command: |
+            if [[ "<< parameters.target >>" == "test/e2e" ]]; then
+              for i in build/reports/test_e2e_*.xml; do
+                echo "fixing $i"
+                CORRECT_PACKAGE=$(cat build/reports/test_e2e_trafficpermission_kubernetes_results.xml  | yq -p=xml '.testsuites.testsuite["+package"]' | awk '{split($0,a,"test/e2e"); print "test/e2e"a[2]}')
+                echo "correct package $CORRECT_PACKAGE"
+                yq -o=xml -p=xml '.testsuites.testsuite.testcase[].["+classname"] = "'$CORRECT_PACKAGE'"' -i $i
+              done
+            fi
       - store_test_results:
           path: build/reports
       - store_artifacts:
