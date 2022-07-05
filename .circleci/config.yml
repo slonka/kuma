@@ -354,7 +354,8 @@ jobs:
                 echo "fixing $i"
                 CORRECT_PACKAGE=$(cat $i | yq -p=xml '.testsuites.testsuite["+package"]' | awk '{split($0,a,"test/e2e"); print "test/e2e"a[2]}')
                 echo "correct package $CORRECT_PACKAGE"
-                yq -o=xml -p=xml '.testsuites.testsuite.testcase[].["+classname"] = "'$CORRECT_PACKAGE'"' -i $i
+                yq -o=xml -p=xml '.testsuites.testsuite.testcase[].["+classname"] = "'$CORRECT_PACKAGE'"' -i $i  || true
+                yq -o=xml -p=xml '.testsuites.testsuite.testcase.["+classname"] = "'$CORRECT_PACKAGE'"' -i $i || true
               done
             fi
       - store_test_results:
