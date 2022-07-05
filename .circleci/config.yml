@@ -321,7 +321,7 @@ jobs:
       - run:
           name: Check out previous test metadata
           command: |
-            cat "${CIRCLE_INTERNAL_TASK_DATA}/circle-test-results/results.json" | jq .
+            cat "${CIRCLE_INTERNAL_TASK_DATA}/circle-test-results/results.json" | jq . || true
       - run:
           name: "Run E2E tests"
           command: |
@@ -342,11 +342,13 @@ jobs:
             fi
 
             if [[ "<< parameters.target >>" == "test/e2e" ]]; then
-              export E2E_PKG_LIST=${E2E_PKG_LIST:-$(circleci tests glob ./test/e2e/* | circleci tests split --split-by=timings | xargs printf "./%s/... ")}
+              export E2E_PKG_LIST=${E2E_PKG_LIST:-$(circleci tests glob ./test/e2e/* | circleci tests split --split-by=timings --timings-type=classname | xargs printf "./%s/... ")}
             fi
             env
             make ${MAKE_PARAMETERS} << parameters.target >>
       - store_test_results:
+          path: build/reports
+      - store_artifacts:
           path: build/reports
 
   build:
