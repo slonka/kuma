@@ -486,7 +486,6 @@ func (s *UniversalApp) setupTransparent(cpIp string, builtindns bool) {
 			"--skip-resolv-conf",
 			"--redirect-dns",
 		)
-
 	}
 
 	app := ssh.NewApp(s.verbose, s.ports[sshPort], nil, args)
