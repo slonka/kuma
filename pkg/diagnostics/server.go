@@ -50,6 +50,7 @@ func (s *diagnosticsServer) Start(stop <-chan struct{}) error {
 		mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
 		mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
 		mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+		mux.HandleFunc("/debug/heap-dump/", HeapDump)
 	}
 
 	httpServer := &http.Server{Addr: fmt.Sprintf(":%d", s.config.ServerPort), Handler: mux}
