@@ -19,6 +19,7 @@ const (
 
 	DefaultRetries = 30
 	DefaultTimeout = 3 * time.Second
+	DefaultMustPassRepeatedly = 5
 
 	kdsPort             = 30685
 	loadBalancerKdsPort = 5685
