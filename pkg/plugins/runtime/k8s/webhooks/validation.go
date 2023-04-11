@@ -23,7 +23,10 @@ import (
 	k8s_model "github.com/kumahq/kuma/pkg/plugins/resources/k8s/native/pkg/model"
 	k8s_registry "github.com/kumahq/kuma/pkg/plugins/resources/k8s/native/pkg/registry"
 	"github.com/kumahq/kuma/pkg/version"
+	kuma_core "github.com/kumahq/kuma/pkg/core"
 )
+
+var logger = kuma_core.Log.WithName("validating-webhook")
 
 func NewValidatingWebhook(converter k8s_common.Converter, coreRegistry core_registry.TypeRegistry, k8sRegistry k8s_registry.TypeRegistry, mode core.CpMode, allowedServiceAccounts []string) k8s_common.AdmissionValidator {
 	return &validatingHandler{
@@ -70,6 +73,8 @@ func (h *validatingHandler) Handle(ctx context.Context, req admission.Request) a
 			return resp
 		}
 
+		logger.Info("got here", "user" , req.UserInfo.Username)
+
 		coreRes, k8sObj, err := h.decode(req)
 		if err != nil {
 			return admission.Errored(http.StatusBadRequest, err)
@@ -111,12 +116,14 @@ func (h *validatingHandler) decode(req admission.Request) (core_model.Resource, 
 
 // Note that this func does not validate ConfigMap and Secret since this webhook does not support those
 func (h *validatingHandler) isOperationAllowed(resType core_model.ResourceType, userInfo authenticationv1.UserInfo) admission.Response {
+	logger.Info("pre isOperationAllowed", "user" ,userInfo.Username)
 	if slices.Contains(h.allowedServiceAccounts, userInfo.Username) {
 		// Assume this means one of the following:
 		// - sync from another zone (rt.Config().Runtime.Kubernetes.ServiceAccountName))
 		// - GC cleanup resources due to OwnerRef. ("system:serviceaccount:kube-system:generic-garbage-collector")
 		// - storageversionmigratior
 		// Not security; protecting user from self.
+		logger.Info("allowed in isOperationAllowed", "user" ,userInfo.Username)
 		return admission.Allowed("")
 	}
 
