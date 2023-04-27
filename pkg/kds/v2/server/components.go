@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"github.com/kumahq/kuma/pkg/multitenant"
 	"time"
 
 	envoy_core "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
@@ -33,7 +34,7 @@ func New(
 	insight bool,
 	nackBackoff time.Duration,
 ) (Server, error) {
-	hasher, cache := newKDSContext(log)
+	hasher, cache := newKDSContext(rt.AppContext(), rt.HashingFn().ResourceHashKey, log)
 	generator := reconcile_v2.NewSnapshotGenerator(rt.ReadOnlyResourceManager(), providedTypes, filter, mapper)
 	statsCallbacks, err := util_xds.NewStatsCallbacks(rt.Metrics(), "kds_delta")
 	if err != nil {
@@ -96,7 +97,7 @@ func newSyncTracker(log logr.Logger, reconciler reconcile_v2.Reconciler, refresh
 				defer func() {
 					kdsGenerations.Observe(float64(core.Now().Sub(start).Milliseconds()))
 				}()
-				log.V(1).Info("on tick")
+				log.Info("reconcile", "tenantId", multitenant.TenantFromCtx(ctx))
 				return reconciler.Reconcile(ctx, node)
 			},
 			OnError: func(err error) {
@@ -110,13 +111,15 @@ func newSyncTracker(log logr.Logger, reconciler reconcile_v2.Reconciler, refresh
 	}), nil
 }
 
-func newKDSContext(log logr.Logger) (envoy_cache.NodeHash, envoy_cache.SnapshotCache) {
-	hasher := hasher{}
+func newKDSContext(ctx context.Context, key func(ctx context.Context) string, log logr.Logger) (envoy_cache.NodeHash, envoy_cache.SnapshotCache) {
+	hasher := multitenant.NewCtxIDHash(ctx, key, hasher{})
 	logger := util_xds.NewLogger(log)
 	return hasher, envoy_cache.NewSnapshotCache(false, hasher, logger)
 }
 
 type hasher struct{}
+
+var _ util_xds_v3.NodeHash = hasher{}
 
 func (_ hasher) ID(node *envoy_core.Node) string {
 	// TODO: https://github.com/kumahq/kuma/issues/6632 check if it needs to be the same hasher as passed to reconcile

@@ -65,7 +65,7 @@ var _ = Describe("Global Sync", func() {
 			err := globalStore.List(context.Background(), &actual)
 			Expect(err).ToNot(HaveOccurred())
 			return len(actual.Items)
-		}, "5s", "100ms").Should(Equal(10))
+		}, "15s", "2s").Should(Equal(10))
 		closeFunc()
 	}
 

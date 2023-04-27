@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"context"
 	"time"
 
 	kuma_cp "github.com/kumahq/kuma/pkg/config/app/kuma-cp"
@@ -27,6 +28,7 @@ type testRuntimeContext struct {
 	hashingFn                multitenant.Hashing
 	pgxConfigCustomizationFn config.PgxConfigCustomization
 	tenantFn                 multitenant.Tenant
+	appCtx                   context.Context
 }
 
 func (t *testRuntimeContext) Config() kuma_cp.Config {
@@ -53,6 +55,10 @@ func (t *testRuntimeContext) TenantFn() multitenant.Tenant {
 	return t.tenantFn
 }
 
+func (t *testRuntimeContext) AppContext() context.Context {
+	return t.appCtx
+}
+
 func (t *testRuntimeContext) Add(c ...component.Component) error {
 	t.components = append(t.components, c...)
 	return nil
@@ -68,8 +74,11 @@ func StartServer(store store.ResourceStore, clusterID string, providedTypes []mo
 		cfg:                      kuma_cp.Config{},
 		metrics:                  metrics,
 		tenantFn:                 multitenant.SingleTenant,
-		hashingFn:                multitenant.NoopHashingFn,
+		hashingFn:                multitenant.HashingFn(func(ctx context.Context) string {
+			return multitenant.TenantFromCtx(ctx)
+		}),
 		pgxConfigCustomizationFn: config.NoopPgxConfigCustomizationFn,
+		appCtx:                   multitenant.WithTenant(context.Background(), "foo"),
 	}
 	return kds_server.New(core.Log.WithName("kds").WithName(clusterID), rt, providedTypes, clusterID, 100*time.Millisecond, providedFilter, providedMapper, false, 1*time.Second)
 }
@@ -84,8 +93,11 @@ func StartDeltaServer(store store.ResourceStore, clusterID string, providedTypes
 		cfg:                      kuma_cp.Config{},
 		metrics:                  metrics,
 		tenantFn:                 multitenant.SingleTenant,
-		hashingFn:                multitenant.NoopHashingFn,
+		hashingFn:                multitenant.HashingFn(func(ctx context.Context) string {
+			return multitenant.TenantFromCtx(ctx)
+		}),
 		pgxConfigCustomizationFn: config.NoopPgxConfigCustomizationFn,
+		appCtx:                   multitenant.WithTenant(context.Background(), "foo"),
 	}
 	return kds_server_v2.New(core.Log.WithName("kds-delta").WithName(clusterID), rt, providedTypes, clusterID, 100*time.Millisecond, providedFilter, providedMapper, false, 1*time.Second)
 }
