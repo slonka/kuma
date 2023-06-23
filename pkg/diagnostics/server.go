@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"github.com/kumahq/kuma/pkg/diagnostics/logging"
 	"net/http"
 	pprof "net/http/pprof"
 	"time"
@@ -43,6 +44,7 @@ func (s *diagnosticsServer) Start(stop <-chan struct{}) error {
 		resp.WriteHeader(http.StatusOK)
 	})
 	mux.Handle("/metrics", promhttp.InstrumentMetricHandler(s.metrics, promhttp.HandlerFor(s.metrics, promhttp.HandlerOpts{})))
+	mux.HandleFunc("/logging", logging.ChangeLogLevel)
 	if s.config.DebugEndpoints {
 		mux.HandleFunc("/debug/pprof/", pprof.Index)
 		mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)

@@ -64,8 +64,9 @@ func NewLoggerTo(destWriter io.Writer, level LogLevel) logr.Logger {
 	return zapr.NewLogger(newZapLoggerTo(destWriter, level))
 }
 
+var Lvl zap.AtomicLevel
+
 func newZapLoggerTo(destWriter io.Writer, level LogLevel, opts ...zap.Option) *zap.Logger {
-	var lvl zap.AtomicLevel
 	switch level {
 	case OffLevel:
 		return zap.NewNop()
@@ -74,15 +75,15 @@ func newZapLoggerTo(destWriter io.Writer, level LogLevel, opts ...zap.Option) *z
 		// will end up being emitted through the `V(level int)`
 		// accessor. Passing -10 ensures that levels up to `V(10)`
 		// will work, which seems like plenty.
-		lvl = zap.NewAtomicLevelAt(-10)
+		Lvl = zap.NewAtomicLevelAt(-10)
 		opts = append(opts, zap.AddStacktrace(zap.ErrorLevel))
 	default:
-		lvl = zap.NewAtomicLevelAt(zap.InfoLevel)
+		Lvl = zap.NewAtomicLevelAt(zap.InfoLevel)
 	}
 	encCfg := zap.NewDevelopmentEncoderConfig()
 	enc := zapcore.NewConsoleEncoder(encCfg)
 	sink := zapcore.AddSync(destWriter)
 	opts = append(opts, zap.AddCallerSkip(1), zap.ErrorOutput(sink))
-	return zap.New(zapcore.NewCore(&kube_log_zap.KubeAwareEncoder{Encoder: enc, Verbose: level == DebugLevel}, sink, lvl)).
+	return zap.New(zapcore.NewCore(&kube_log_zap.KubeAwareEncoder{Encoder: enc, Verbose: level == DebugLevel}, sink, Lvl)).
 		WithOptions(opts...)
 }
