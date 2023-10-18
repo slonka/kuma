@@ -46,6 +46,8 @@ func (b *BootstrapHandler) Handle(resp http.ResponseWriter, req *http.Request) {
 		hostname = host
 	}
 
+	log.V(1).Info("received bootstrap request for", "name", reqParams.Name, "mesh", reqParams.Mesh, "proxyType", reqParams.ProxyType)
+
 	reqParams.Host = hostname
 	logger := log.WithValues("params", reqParams)
 

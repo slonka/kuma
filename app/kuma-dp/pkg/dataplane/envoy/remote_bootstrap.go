@@ -211,6 +211,7 @@ func (b *remoteBootstrap) requestForBootstrap(ctx context.Context, client *http.
 			return nil, errors.Wrapf(err, "Unable to read the response with status code: %d. Make sure you are using https URL", resp.StatusCode)
 		}
 		if resp.StatusCode == http.StatusNotFound && len(bodyBytes) == 0 {
+			log.V(1).Info("received 404 without a body", "err", err)
 			return nil, DpNotFoundErr
 		}
 		if resp.StatusCode == http.StatusNotFound && string(bodyBytes) == "404: Page Not Found" { // response body of Go HTTP Server when hit for invalid endpoint
