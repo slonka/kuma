@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/pkg/errors"
 	"github.com/sethvargo/go-retry"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -164,7 +165,9 @@ func (g *GlobalKDSServiceServer) streamEnvoyAdminRPC(
 	logger.Info("Envoy Admin RPC stream started")
 	rpc.ClientConnected(clientID, stream)
 	if err := g.storeStreamConnection(stream.Context(), zone, rpcName, g.instanceID); err != nil {
-		logger.Error(err, "could not store stream connection")
+		if !errors.Is(err, context.Canceled) {
+			logger.Error(err, "could not store stream connection")
+		}
 		return status.Error(codes.Internal, "could not store stream connection")
 	}
 	logger.Info("stored stream connection")
