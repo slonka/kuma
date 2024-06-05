@@ -36,6 +36,9 @@ func (mc *ContextBuilder) Build() *xds_context.Context {
 	for _, ms := range mc.res.Mesh.Resources.MeshServices().Items {
 		mc.res.Mesh.MeshServiceByName[ms.GetMeta().GetName()] = ms
 	}
+	for _, mes := range mc.res.Mesh.Resources.MeshExternalServices().Items {
+		mc.res.Mesh.MeshExternalServiceByName[mes.GetMeta().GetName()] = mes
+	}
 	return mc.res
 }
 

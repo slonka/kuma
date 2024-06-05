@@ -68,38 +68,65 @@ func CollectServices(
 	meshCtx xds_context.MeshContext,
 ) []DestinationService {
 	var dests []DestinationService
-	for _, outbound := range proxy.Dataplane.Spec.GetNetworking().GetOutbounds() {
+	outbounds := proxy.Dataplane.Spec.GetNetworking().GetOutbounds()
+	var vipOutbounds []*mesh_proto.Dataplane_Networking_Outbound
+	for _, vipOutbound := range meshCtx.VIPOutbounds {
+		if vipOutbound.BackendRef != nil {
+			vipOutbounds = append(vipOutbounds, vipOutbound)
+		}
+	}
+	outbounds = append(outbounds, vipOutbounds...)
+	for _, outbound := range outbounds {
 		oface := proxy.Dataplane.Spec.Networking.ToOutboundInterface(outbound)
 		if outbound.BackendRef != nil {
 			if outbound.GetAddress() == proxy.Dataplane.Spec.GetNetworking().GetAddress() {
 				continue
 			}
-			ms, ok := meshCtx.MeshServiceByName[outbound.BackendRef.Name]
-			if !ok {
+			ms, msOk := meshCtx.MeshServiceByName[outbound.BackendRef.Name]
+			mes, mesOk := meshCtx.MeshExternalServiceByName[outbound.BackendRef.Name]
+			if !msOk && !mesOk {
 				// we want to ignore service which is not found. Logging might be excessive here.
 				// We don't have other mechanism to bubble up warnings yet.
 				continue
 			}
-			port, ok := ms.FindPort(outbound.BackendRef.Port)
-			if !ok {
-				continue
-			}
-			protocol := core_mesh.Protocol(core_mesh.ProtocolTCP)
-			if port.Protocol != "" {
-				protocol = port.Protocol
-			}
-			dests = append(dests, DestinationService{
-				Outbound:    oface,
-				Protocol:    protocol,
-				ServiceName: ms.DestinationName(outbound.BackendRef.Port),
-				BackendRef: common_api.BackendRef{
-					TargetRef: common_api.TargetRef{
-						Kind: common_api.MeshService,
-						Name: ms.GetMeta().GetName(),
+			if msOk {
+				port, ok := ms.FindPort(outbound.BackendRef.Port)
+				if !ok {
+					continue
+				}
+				protocol := core_mesh.Protocol(core_mesh.ProtocolTCP)
+				if port.Protocol != "" {
+					protocol = port.Protocol
+				}
+				dests = append(dests, DestinationService{
+					Outbound:    oface,
+					Protocol:    protocol,
+					ServiceName: ms.DestinationName(outbound.BackendRef.Port),
+					BackendRef: common_api.BackendRef{
+						TargetRef: common_api.TargetRef{
+							Kind: common_api.MeshService,
+							Name: ms.GetMeta().GetName(),
+						},
+						Port: &port.Port,
 					},
-					Port: &port.Port,
-				},
-			})
+				})
+			}
+			if mesOk {
+				port := mes.Spec.Match.Port
+				protocol := mes.Spec.Match.Protocol
+				dests = append(dests, DestinationService{
+					Outbound:    oface,
+					Protocol: core_mesh.Protocol(protocol),
+					ServiceName: mes.DestinationName(outbound.BackendRef.Port),
+					BackendRef: common_api.BackendRef{
+						TargetRef: common_api.TargetRef{
+							Kind: common_api.MeshService,
+							Name: mes.GetMeta().GetName(),
+						},
+						Port: pointer.To(uint32(port)),
+					},
+				})
+			}
 		} else {
 			serviceName := outbound.GetService()
 			dests = append(dests, DestinationService{
