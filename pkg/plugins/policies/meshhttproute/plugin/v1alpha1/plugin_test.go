@@ -143,9 +143,9 @@ var _ = Describe("MeshHTTPRoute", func() {
 				Spec: &meshservice_api.MeshService{
 					Selector: meshservice_api.Selector{},
 					Ports: []meshservice_api.Port{{
-						Port:       80,
-						TargetPort: intstr.FromInt(8084),
-						Protocol:   core_mesh.ProtocolHTTP,
+						Port:        80,
+						TargetPort:  intstr.FromInt(8084),
+						AppProtocol: core_mesh.ProtocolHTTP,
 					}},
 					Identities: []meshservice_api.MeshServiceIdentity{
 						{
@@ -299,6 +299,10 @@ var _ = Describe("MeshHTTPRoute", func() {
 						{
 							Address: "example.com",
 							Port:    pointer.To(meshexternalservice_api.Port(10000)),
+						},
+						{
+							Address: "example2.com",
+							Port:    pointer.To(meshexternalservice_api.Port(11111)),
 						},
 					},
 					Tls: &meshexternalservice_api.Tls{
