@@ -24,6 +24,13 @@ func TargetRefService(name string) common_api.TargetRef {
 	}
 }
 
+func TargetRefMeshExternalService(name string) common_api.TargetRef {
+	return common_api.TargetRef{
+		Kind: "MeshExternalService",
+		Name: name,
+	}
+}
+
 func TargetRefServiceSubset(name string, kv ...string) common_api.TargetRef {
 	return common_api.TargetRef{
 		Kind: "MeshServiceSubset",
