@@ -7,6 +7,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	core_mesh "github.com/kumahq/kuma/pkg/core/resources/apis/mesh"
+	meshexternalservice_api "github.com/kumahq/kuma/pkg/core/resources/apis/meshexternalservice/api/v1alpha1"
 	"github.com/kumahq/kuma/pkg/plugins/policies/meshtcproute/api/v1alpha1"
 	. "github.com/kumahq/kuma/test/framework"
 	"github.com/kumahq/kuma/test/framework/client"
@@ -51,6 +52,14 @@ func Test() {
 				testserver.WithName("external-tcp-service"),
 				testserver.WithNamespace(namespace),
 			)).
+			Install(testserver.Install(
+				testserver.WithName("mesh-external-http-service"),
+				testserver.WithNamespace(namespace),
+			)).
+			Install(testserver.Install(
+				testserver.WithName("mesh-external-tcp-service"),
+				testserver.WithNamespace(namespace),
+			)).
 			Setup(kubernetes.Cluster),
 		).To(Succeed())
 	})
@@ -69,6 +78,11 @@ func Test() {
 			kubernetes.Cluster,
 			meshName,
 			core_mesh.ExternalServiceResourceTypeDescriptor,
+		)).To(Succeed())
+		Expect(DeleteMeshResources(
+			kubernetes.Cluster,
+			meshName,
+			meshexternalservice_api.MeshExternalServiceResourceTypeDescriptor,
 		)).To(Succeed())
 	})
 
@@ -98,6 +112,38 @@ apiVersion: kuma.io/v1alpha1
 kind: ExternalService
 metadata:
   name: external-http-service-mtcpr
+mesh: %s
+spec:
+  tags:
+    kuma.io/service: external-http-service-mtcpr
+    kuma.io/protocol: http
+  networking:
+    # .svc.cluster.local is needed, otherwise Kubernetes will resolve this
+    # to the real IP
+    address: external-http-service.%s.svc.cluster.local:80
+`, meshName, namespace)))).To(Succeed())
+
+		Expect(kubernetes.Cluster.Install(YamlK8s(fmt.Sprintf(`
+apiVersion: kuma.io/v1alpha1
+kind: HostnameGenerator
+metadata:
+  labels:
+    kuma.io/mesh: %s
+  name: mes-hg
+  namespace: %s
+spec:
+  selector:
+    meshExternalService:
+      matchLabels:
+        hostname: "true"
+  template: "{{ .Name }}.mesh"
+`, meshName, Config.KumaNamespace)))).To(Succeed())
+
+		Expect(kubernetes.Cluster.Install(YamlK8s(fmt.Sprintf(`
+apiVersion: kuma.io/v1alpha1
+kind: MeshExternalService
+metadata:
+  name: mesh-external-http-service-mtcpr
 mesh: %s
 spec:
   tags:
