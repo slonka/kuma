@@ -593,6 +593,8 @@ func asSubset(tr common_api.TargetRef) (Subset, error) {
 		return ss, nil
 	case common_api.MeshService:
 		return Subset{{Key: mesh_proto.ServiceTag, Value: tr.Name}}, nil
+	case common_api.MeshExternalService:
+		return Subset{{Key: mesh_proto.ServiceTag, Value: tr.Name}}, nil
 	case common_api.MeshServiceSubset:
 		ss := Subset{{Key: mesh_proto.ServiceTag, Value: tr.Name}}
 		for k, v := range tr.Tags {
