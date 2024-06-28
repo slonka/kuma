@@ -145,6 +145,11 @@ func dppSelectedByPolicy(
 			mesh_proto.ServiceTag: ref.Name,
 		}, dpp, gateway)
 		return inbounds, gwListeners, gateway, nil
+	case common_api.MeshExternalService:
+		inbounds, gwListeners, gateway := inboundsSelectedByTags(map[string]string{
+			mesh_proto.ServiceTag: ref.Name,
+		}, dpp, gateway)
+		return inbounds, gwListeners, gateway, nil
 	case common_api.MeshServiceSubset:
 		tags := map[string]string{
 			mesh_proto.ServiceTag: ref.Name,
