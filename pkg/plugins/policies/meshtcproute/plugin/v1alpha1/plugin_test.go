@@ -173,6 +173,137 @@ var _ = Describe("MeshTCPRoute", func() {
 				},
 			},
 		}),
+
+		Entry("meshexternalservice", policiesTestCase{
+			dataplane: samples.DataplaneWeb(),
+			resources: xds_context.Resources{
+				MeshLocalResources: map[core_model.ResourceType]core_model.ResourceList{
+					meshexternalservice_api.MeshExternalServiceType: &meshexternalservice_api.MeshExternalServiceResourceList{
+						Items:      []*meshexternalservice_api.MeshExternalServiceResource{
+							{
+								Meta: &test_model.ResourceMeta{
+									Mesh: core_model.DefaultMesh,
+									Name: "mes-1",
+								},
+								Spec: &meshexternalservice_api.MeshExternalService{
+									Match:     meshexternalservice_api.Match{
+										Port:     80,
+										Protocol: "http",
+									},
+									Endpoints: []meshexternalservice_api.Endpoint{
+										{
+											Address: "example1.com",
+											Port:    pointer.To(meshexternalservice_api.Port(8001)),
+										},
+									},
+								},
+							},
+							{
+								Meta: &test_model.ResourceMeta{
+									Mesh: core_model.DefaultMesh,
+									Name: "mes-2",
+								},
+								Spec: &meshexternalservice_api.MeshExternalService{
+									Match:     meshexternalservice_api.Match{
+										Port:     80,
+										Protocol: "http",
+									},
+									Endpoints: []meshexternalservice_api.Endpoint{
+										{
+											Address: "example2.com",
+											Port:    pointer.To(meshexternalservice_api.Port(8002)),
+										},
+										{
+											Address: "example3.com",
+											Port:    pointer.To(meshexternalservice_api.Port(8003)),
+										},
+									},
+								},
+							},
+							{
+								Meta: &test_model.ResourceMeta{
+									Mesh: core_model.DefaultMesh,
+									Name: "mes-3",
+								},
+								Spec: &meshexternalservice_api.MeshExternalService{
+									Match:     meshexternalservice_api.Match{
+										Port:     80,
+										Protocol: "http",
+									},
+									Endpoints: []meshexternalservice_api.Endpoint{
+										{
+											Address: "example4.com",
+											Port:    pointer.To(meshexternalservice_api.Port(8004)),
+										},
+									},
+								},
+							},
+						},
+					},
+					api.MeshTCPRouteType: &api.MeshTCPRouteResourceList{
+						Items: []*api.MeshTCPRouteResource{
+							{
+								Meta: &test_model.ResourceMeta{
+									Mesh: core_model.DefaultMesh,
+									Name: "route-2",
+								},
+								Spec: &api.MeshTCPRoute{
+									TargetRef: builders.TargetRefService("web"),
+									To: []api.To{
+										{
+											TargetRef: builders.TargetRefMeshExternalService("mes-1"),
+											Rules: []api.Rule{
+												{
+													Default: api.RuleConf{
+														BackendRefs: []common_api.BackendRef{
+															{
+																TargetRef: builders.TargetRefMeshExternalService("mes-2"),
+																Weight: pointer.To(uint(20)),
+															},
+															{
+																TargetRef: builders.TargetRefMeshExternalService("mes-3"),
+																Weight: pointer.To(uint(80)),
+															},
+														},
+													},
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedRoutes: core_rules.ToRules{
+				Rules: core_rules.Rules{
+					{
+						Subset: core_rules.MeshService("mes-1"),
+						Conf: api.Rule{
+							Default: api.RuleConf{
+								BackendRefs: []common_api.BackendRef{
+									{
+										TargetRef: builders.TargetRefMeshExternalService("mes-2"),
+										Weight: pointer.To(uint(20)),
+									},
+									{
+										TargetRef: builders.TargetRefMeshExternalService("mes-3"),
+										Weight: pointer.To(uint(80)),
+									},
+								},
+							},
+						},
+						Origin: []core_model.ResourceMeta{
+							&test_model.ResourceMeta{
+								Mesh: "default",
+								Name: "route-2",
+							},
+						},
+					},
+				},
+			},
+		}),
 	)
 
 	type outboundsTestCase struct {
