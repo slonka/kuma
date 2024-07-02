@@ -9,7 +9,12 @@ import (
 )
 
 func getBackendRefs(toRulesTCP core_xds.Rules, toRulesHTTP core_xds.Rules, serviceName string, protocol core_mesh.Protocol, backendRef common_api.BackendRef) []common_api.BackendRef {
-	service := core_xds.MeshService(serviceName)
+	var service core_xds.Subset
+	if backendRef.Kind == common_api.MeshExternalService {
+		service = core_xds.MeshExternalService(backendRef)
+	} else {
+		service = core_xds.MeshService(serviceName)
+	}
 
 	tcpConf := core_xds.ComputeConf[api.Rule](toRulesTCP, service)
 

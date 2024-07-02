@@ -114,6 +114,7 @@ func CollectServices(
 						TargetRef: common_api.TargetRef{
 							Kind: common_api.MeshExternalService,
 							Name: mes.GetMeta().GetName(),
+							Labels: mes.Meta.GetLabels(),
 						},
 						Port: pointer.To(uint32(port)),
 					},
