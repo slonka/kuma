@@ -37,9 +37,20 @@ func getBackendRefs(toRulesTCP core_xds.Rules, toRulesHTTP core_xds.Rules, servi
 	}
 
 	if tcpConf != nil {
-		return tcpConf.Default.BackendRefs
+		return mapName(tcpConf.Default.BackendRefs, serviceName)
 	}
 	return []common_api.BackendRef{
 		backendRef,
 	}
+}
+
+func mapName(refs []common_api.BackendRef, name string) []common_api.BackendRef {
+	var newRefs []common_api.BackendRef
+	for _, ref := range refs {
+		newRef := ref
+		newRef.Name = name
+		newRefs = append(newRefs, newRef)
+	}
+
+	return newRefs
 }
