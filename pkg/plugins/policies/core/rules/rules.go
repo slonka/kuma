@@ -209,10 +209,25 @@ func MeshService(name string) Subset {
 	}}
 }
 
-func MeshExternalService(name string) Subset {
-	return Subset{{
-		Key: mesh_proto.ServiceTag, Value: name,
-	}}
+func MeshExternalService(meshExternalService common_api.BackendRef) Subset {
+	// On universal meshExternalService.Name will be just name, on k8s it will be 'name.namespace'.
+	// We need to trim namespace for matching as namespace is added as separate tag.
+	// On universal namespace label will be empty so name will be unchanged
+
+	resourceName := meshExternalService.Name
+	ns, ok := meshExternalService.Labels[mesh_proto.KubeNamespaceTag]
+	if ok {
+		resourceName = strings.TrimSuffix(resourceName, fmt.Sprintf(".%s", ns))
+	}
+	subset := Subset{
+		{Key: mesh_proto.ServiceTag, Value: resourceName},
+	}
+
+	for label, value := range meshExternalService.Labels {
+		subset = append(subset, Tag{Key: label, Value: value})
+	}
+
+	return subset
 }
 
 func SubsetFromTags(tags map[string]string) Subset {

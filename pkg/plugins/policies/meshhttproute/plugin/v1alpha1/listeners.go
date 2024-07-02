@@ -155,7 +155,7 @@ func prepareRoutes(
 	conf := rules.ComputeConf[api.PolicyDefault](toRules, core_rules.MeshService(svc.ServiceName))
 	switch svc.BackendRef.Kind {
 	case common_api.MeshExternalService:
-		conf = rules.ComputeConf[api.PolicyDefault](toRules, core_rules.MeshExternalService(svc.ServiceName))
+		conf = rules.ComputeConf[api.PolicyDefault](toRules, core_rules.MeshExternalService(svc.BackendRef))
 	}
 
 	var apiRules []api.Rule
