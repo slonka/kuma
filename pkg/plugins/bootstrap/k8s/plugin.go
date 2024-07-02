@@ -68,7 +68,7 @@ func (p *plugin) BeforeBootstrap(b *core_runtime.Builder, cfg core_plugins.Plugi
 				Port:    int(b.Config().Runtime.Kubernetes.AdmissionServer.Port),
 				CertDir: b.Config().Runtime.Kubernetes.AdmissionServer.CertDir,
 			}),
-			LeaderElection:          true,
+			LeaderElection:          false,
 			LeaderElectionID:        "cp-leader-lease",
 			LeaderElectionNamespace: systemNamespace,
 			Logger:                  core.Log.WithName("kube-manager"),
