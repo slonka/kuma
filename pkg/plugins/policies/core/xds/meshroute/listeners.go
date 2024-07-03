@@ -2,6 +2,10 @@ package meshroute
 
 import (
 	"fmt"
+	util_k8s "github.com/kumahq/kuma/pkg/util/k8s"
+	"golang.org/x/exp/maps"
+	"sort"
+	"strings"
 
 	common_api "github.com/kumahq/kuma/api/common/v1alpha1"
 	mesh_proto "github.com/kumahq/kuma/api/mesh/v1alpha1"
@@ -15,8 +19,61 @@ import (
 	envoy_tags "github.com/kumahq/kuma/pkg/xds/envoy/tags"
 )
 
+type BackendRef struct {
+	CoreName string
+	Port *uint32
+	Kind common_api.TargetRefKind
+	Tags map[string]string
+	Weight *uint
+	Mesh string
+}
+
+type BackendRefHash string
+
+// Hash returns a hash of the BackendRef
+func (in BackendRef) Hash() BackendRefHash {
+	keys := maps.Keys(in.Tags)
+	sort.Strings(keys)
+	orderedTags := make([]string, 0, len(keys))
+	for _, k := range keys {
+		orderedTags = append(orderedTags, fmt.Sprintf("%s=%s", k, in.Tags[k]))
+	}
+	name := in.CoreName
+	if in.Port != nil {
+		name = fmt.Sprintf("%s_svc_%d", in.CoreName, *in.Port)
+	}
+	return BackendRefHash(fmt.Sprintf("%s/%s/%s/%s", in.Kind, name, strings.Join(orderedTags, "/"), in.Mesh))
+}
+
+func mapToSplitBackendRefs(refs []common_api.BackendRef) []BackendRef {
+	var newRefs []BackendRef
+
+	for _, ref := range refs {
+		var coreName string
+
+		if ref.Namespace != "" {
+			coreName = util_k8s.K8sNamespacedNameToCoreName(ref.Name, ref.Namespace)
+		} else {
+			coreName = ref.Name
+		}
+
+		newRef := BackendRef{
+			CoreName: coreName,
+			Port:     ref.Port,
+			Kind:     ref.Kind,
+			Tags:     ref.Tags,
+			Weight:   ref.Weight,
+			Mesh:     ref.Mesh,
+		}
+		newRefs = append(newRefs, newRef)
+	}
+
+	return newRefs
+}
+
+
 func MakeTCPSplit(
-	clusterCache map[common_api.BackendRefHash]string,
+	clusterCache map[BackendRefHash]string,
 	servicesAcc envoy_common.ServicesAccumulator,
 	refs []common_api.BackendRef,
 	meshCtx xds_context.MeshContext,
@@ -32,7 +89,7 @@ func MakeTCPSplit(
 		},
 		clusterCache,
 		servicesAcc,
-		refs,
+		mapToSplitBackendRefs(refs),
 		meshCtx,
 	)
 }
@@ -51,7 +108,7 @@ func MakeHTTPSplit(
 		},
 		clusterCache,
 		servicesAcc,
-		refs,
+		mapToSplitBackendRefs(refs),
 		meshCtx,
 	)
 }
@@ -139,11 +196,11 @@ func CollectServices(
 	return dests
 }
 
-func makeSplit(
+func makeSplit[T ~string](
 	protocols map[core_mesh.Protocol]struct{},
-	clusterCache map[common_api.BackendRefHash]string,
+	clusterCache map[T]string,
 	servicesAcc envoy_common.ServicesAccumulator,
-	refs []common_api.BackendRef,
+	refs []BackendRef,
 	meshCtx xds_context.MeshContext,
 ) []envoy_common.Split {
 	var split []envoy_common.Split
@@ -163,7 +220,7 @@ func makeSplit(
 		var meshServiceName string
 		switch {
 		case ref.Kind == common_api.MeshExternalService:
-			mes, ok := meshCtx.MeshExternalServiceByName[ref.Name]
+			mes, ok := meshCtx.MeshExternalServiceByName[ref.CoreName]
 			if !ok {
 				continue
 			}
@@ -171,7 +228,7 @@ func makeSplit(
 			service = mes.DestinationName(port)
 			protocol = meshCtx.GetServiceProtocol(service)
 		case ref.Port != nil: // in this case, reference real MeshService instead of kuma.io/service tag
-			ms, ok := meshCtx.MeshServiceByName[ref.Name]
+			ms, ok := meshCtx.MeshServiceByName[ref.CoreName]
 			if !ok {
 				continue
 			}
@@ -183,7 +240,7 @@ func makeSplit(
 			service = ms.DestinationName(*ref.Port)
 			protocol = port.AppProtocol // todo(jakubdyszkiewicz): do we need to default to TCP or will this be done by MeshService defaulter?
 		default:
-			service = ref.Name
+			service = ref.CoreName
 			protocol = meshCtx.GetServiceProtocol(service)
 		}
 		if _, ok := protocols[protocol]; !ok {
@@ -192,7 +249,7 @@ func makeSplit(
 
 		var clusterName string
 		if ref.Kind == common_api.MeshExternalService {
-			clusterName = envoy_names.GetMeshExternalServiceName(ref.Name)
+			clusterName = envoy_names.GetMeshExternalServiceName(ref.CoreName)
 		} else {
 			clusterName, _ = envoy_tags.Tags(ref.Tags).
 				WithTags(mesh_proto.ServiceTag, service).
@@ -208,7 +265,7 @@ func makeSplit(
 		}
 
 		isExternalService := meshCtx.IsExternalService(service)
-		refHash := ref.Hash()
+		refHash := T(ref.Hash())
 
 		if existingClusterName, ok := clusterCache[refHash]; ok {
 			// cluster already exists, so adding only split
@@ -232,7 +289,7 @@ func makeSplit(
 			WithService(service).
 			WithName(clusterName).
 			WithTags(envoy_tags.Tags(ref.Tags).
-				WithTags(mesh_proto.ServiceTag, ref.Name).
+				WithTags(mesh_proto.ServiceTag, ref.CoreName).
 				WithoutTags(mesh_proto.MeshTag)).
 			WithExternalService(isExternalService)
 

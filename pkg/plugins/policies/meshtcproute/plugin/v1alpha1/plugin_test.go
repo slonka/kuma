@@ -366,7 +366,7 @@ var _ = Describe("MeshTCPRoute", func() {
 						WithPort(8005).
 						WithWeight(1).
 						WithTags(mesh_proto.ServiceTag, "backend", mesh_proto.ProtocolTag, core_mesh.ProtocolHTTP, "region", "us")).
-				AddEndpoint("other-backend", xds_builders.Endpoint().
+				AddEndpoint("other-backend.kuma-system", xds_builders.Endpoint().
 					WithTarget("192.168.0.6").
 					WithPort(8006).
 					WithWeight(1).
@@ -400,9 +400,11 @@ var _ = Describe("MeshTCPRoute", func() {
 										Weight: pointer.To(uint(15)),
 									},
 									{
-										TargetRef: builders.TargetRefService(
-											"other-backend",
-										),
+										TargetRef: *builders.NewTargetRefBuilder().
+											WithName("other-backend").
+											WithKind("MeshService").
+											WithNamespace("kuma-system").
+											Build(),
 										Weight: pointer.To(uint(15)),
 									},
 									{
