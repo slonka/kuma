@@ -2,6 +2,7 @@ package meshroute
 
 import (
 	"fmt"
+	"github.com/kumahq/kuma/pkg/core/resources/model"
 	util_k8s "github.com/kumahq/kuma/pkg/util/k8s"
 	"golang.org/x/exp/maps"
 	"sort"
@@ -172,6 +173,7 @@ func CollectServices(
 							Kind: common_api.MeshExternalService,
 							Name: mes.GetMeta().GetName(),
 							Labels: mes.Meta.GetLabels(),
+							Namespace: mes.Meta.GetNameExtensions()[model.K8sNamespaceComponent],
 						},
 						Port: pointer.To(uint32(port)),
 					},
