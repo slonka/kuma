@@ -6,6 +6,7 @@ import (
 	core_xds "github.com/kumahq/kuma/pkg/plugins/policies/core/rules"
 	meshhttproute_api "github.com/kumahq/kuma/pkg/plugins/policies/meshhttproute/api/v1alpha1"
 	api "github.com/kumahq/kuma/pkg/plugins/policies/meshtcproute/api/v1alpha1"
+	"strings"
 )
 
 func getBackendRefs(toRulesTCP core_xds.Rules, toRulesHTTP core_xds.Rules, serviceName string, protocol core_mesh.Protocol, backendRef common_api.BackendRef) []common_api.BackendRef {
@@ -37,18 +38,25 @@ func getBackendRefs(toRulesTCP core_xds.Rules, toRulesHTTP core_xds.Rules, servi
 	}
 
 	if tcpConf != nil {
-		return mapName(tcpConf.Default.BackendRefs, serviceName)
+		if backendRef.Kind == common_api.MeshExternalService {
+			parts := strings.Split(serviceName, ".")
+			if len(parts) == 2 {
+				return mapName(tcpConf.Default.BackendRefs, parts[1])
+			}
+		} else {
+			return tcpConf.Default.BackendRefs
+		}
 	}
 	return []common_api.BackendRef{
 		backendRef,
 	}
 }
 
-func mapName(refs []common_api.BackendRef, name string) []common_api.BackendRef {
+func mapName(refs []common_api.BackendRef, namespace string) []common_api.BackendRef {
 	var newRefs []common_api.BackendRef
 	for _, ref := range refs {
 		newRef := ref
-		newRef.Name = name
+		newRef.Name = ref.Name + "." + namespace
 		newRefs = append(newRefs, newRef)
 	}
 
