@@ -1,6 +1,7 @@
 package v1alpha1
 
 import (
+	"github.com/kumahq/kuma/pkg/core"
 	"reflect"
 
 	"golang.org/x/exp/slices"
@@ -181,6 +182,9 @@ func ComputeHTTPRouteConf(toRules rules.ToRules, svc meshroute_xds.DestinationSe
 // prepareRoutes handles the always present, catch all default route
 func prepareRoutes(toRules rules.ToRules, svc meshroute_xds.DestinationService, meshCtx xds_context.MeshContext) []api.Route {
 	conf, backendRefToOrigin := ComputeHTTPRouteConf(toRules, svc, meshCtx)
+
+	core.Log.Info("conf", "conf", conf)
+	core.Log.Info("backendRefToOrigin", "backendRefToOrigin", backendRefToOrigin)
 
 	var apiRules []api.Rule
 	if conf != nil {

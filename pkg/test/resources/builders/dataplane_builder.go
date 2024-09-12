@@ -213,6 +213,16 @@ func (d *DataplaneBuilder) WithBuiltInGateway(name string) *DataplaneBuilder {
 	return d
 }
 
+func (d *DataplaneBuilder) WithDelegatedGateway(name string) *DataplaneBuilder {
+	d.res.Spec.Networking.Gateway = &mesh_proto.Dataplane_Networking_Gateway{
+		Tags: map[string]string{
+			mesh_proto.ServiceTag: name,
+		},
+		Type: mesh_proto.Dataplane_Networking_Gateway_DELEGATED,
+	}
+	return d
+}
+
 func (d *DataplaneBuilder) AddBuiltInGatewayTags(tags map[string]string) *DataplaneBuilder {
 	for k, v := range tags {
 		d.res.Spec.Networking.Gateway.Tags[k] = v

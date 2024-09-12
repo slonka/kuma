@@ -369,7 +369,7 @@ var _ = Describe("MeshHTTPRoute", func() {
 				},
 			}
 
-			dp, proxy := dppForMeshExternalService(&meshExtSvc)
+			dp, proxy := dppForEntity(core_model.NewTypedResourceIdentifier(&meshExtSvc))
 			egress := builders.ZoneEgress().WithPort(10002).Build()
 			mc := meshContextWithResources(dp.Build(), &meshExtSvc, egress)
 
@@ -455,9 +455,126 @@ var _ = Describe("MeshHTTPRoute", func() {
 				},
 			}
 
-			dp, proxy := dppForMeshExternalService(&meshExtSvc)
+			dp, proxy := dppForEntity(core_model.NewTypedResourceIdentifier(&meshExtSvc))
 			egress := builders.ZoneEgress().WithPort(10002).Build()
 			mc := meshContextWithResources(dp.Build(), &meshExtSvc, egress, gateway, &meshHttpRoute)
+
+			return outboundsTestCase{
+				xdsContext: *xds_builders.Context().WithMeshContext(mc).Build(),
+				proxy:      proxy,
+			}
+		}()),
+		FEntry("gateway-meshservice-to-meshexternalservice-and-meshservice-split", func() outboundsTestCase {
+			meshExtSvc := meshexternalservice_api.MeshExternalServiceResource{
+				Meta: &test_model.ResourceMeta{Name: "example", Mesh: "default"},
+				Spec: &meshexternalservice_api.MeshExternalService{
+					Match: meshexternalservice_api.Match{
+						Type:     pointer.To(meshexternalservice_api.HostnameGeneratorType),
+						Port:     9090,
+						Protocol: core_mesh.ProtocolHTTP,
+					},
+					Endpoints: []meshexternalservice_api.Endpoint{
+						{
+							Address: "example.com",
+							Port:    pointer.To(meshexternalservice_api.Port(10000)),
+						},
+					},
+				},
+				Status: &meshexternalservice_api.MeshExternalServiceStatus{
+					VIP: meshexternalservice_api.VIP{
+						IP: "10.20.20.1",
+					},
+				},
+			}
+			meshSvc := meshservice_api.MeshServiceResource{
+				Meta: &test_model.ResourceMeta{Name: "backend", Mesh: "default"},
+				Spec: &meshservice_api.MeshService{
+					Selector: meshservice_api.Selector{},
+					Ports: []meshservice_api.Port{{
+						Port:        80,
+						TargetPort:  intstr.FromInt(8084),
+						AppProtocol: core_mesh.ProtocolHTTP,
+						Name:        "test-port",
+					}},
+					Identities: []meshservice_api.MeshServiceIdentity{
+						{
+							Type:  meshservice_api.MeshServiceIdentityServiceTagType,
+							Value: "backend",
+						},
+						{
+							Type:  meshservice_api.MeshServiceIdentityServiceTagType,
+							Value: "other-backend",
+						},
+					},
+				},
+				Status: &meshservice_api.MeshServiceStatus{
+					VIPs: []meshservice_api.VIP{{
+						IP: "10.0.0.1",
+					}},
+				},
+			}
+			gateway := &core_mesh.MeshGatewayResource{
+				Meta: &test_model.ResourceMeta{Name: "sample-gateway", Mesh: "default"},
+				Spec: &mesh_proto.MeshGateway{
+					Selectors: []*mesh_proto.Selector{
+						{
+							Match: map[string]string{
+								mesh_proto.ServiceTag: "sample-gateway",
+							},
+						},
+					},
+					Conf: &mesh_proto.MeshGateway_Conf{
+						Listeners: []*mesh_proto.MeshGateway_Listener{
+							{
+								Protocol: mesh_proto.MeshGateway_Listener_HTTP,
+								Port:     8080,
+							},
+						},
+					},
+				},
+			}
+			meshHttpRoute := api.MeshHTTPRouteResource{
+				Meta: &test_model.ResourceMeta{Name: "http-route", Mesh: "default"},
+				Spec: &api.MeshHTTPRoute{
+					TargetRef: &common_api.TargetRef{
+						Kind: common_api.MeshService,
+						Name: "simple-gateway",
+					},
+					To: []api.To{
+						{
+							TargetRef: common_api.TargetRef{
+								Kind: common_api.MeshService,
+								SectionName: "test-port",
+								Name: "example",
+							},
+							Rules: []api.Rule{
+								{
+									Matches: []api.Match{{
+										Path: &api.PathMatch{
+											Type:  api.PathPrefix,
+											Value: "/",
+										},
+									}},
+									Default: api.RuleConf{
+										BackendRefs: &[]common_api.BackendRef{{
+											TargetRef: common_api.TargetRef{
+												Kind: common_api.MeshExternalService,
+												Name: "external",
+											},
+											Port:   pointer.To(uint32(9090)),
+											Weight: pointer.To(uint(500)),
+										}},
+									},
+								},
+							},
+						},
+					},
+				},
+			}
+
+			dp, proxy := dppForEntity(core_model.NewTypedResourceIdentifier(&meshSvc))
+			egress := builders.ZoneEgress().WithPort(10002).Build()
+			mc := meshContextWithResources(dp.Build(), &meshExtSvc, &meshSvc, egress, gateway, &meshHttpRoute)
 
 			return outboundsTestCase{
 				xdsContext: *xds_builders.Context().WithMeshContext(mc).Build(),
@@ -487,7 +604,7 @@ var _ = Describe("MeshHTTPRoute", func() {
 				},
 			}
 
-			dp, proxy := dppForMeshExternalService(&meshExtSvc)
+			dp, proxy := dppForEntity(core_model.NewTypedResourceIdentifier(&meshExtSvc))
 			proxy.Policies = core_xds.MatchedPolicies{
 				Dynamic: core_xds.PluginOriginatedPolicies{},
 			}
@@ -535,6 +652,105 @@ var _ = Describe("MeshHTTPRoute", func() {
 				proxy:      proxy,
 			}
 		}()),
+		FEntry("httproute-meshservice-split-to-meshexternalservice", func() outboundsTestCase {
+			meshSvc := meshservice_api.MeshServiceResource{
+				Meta: &test_model.ResourceMeta{Name: "backend", Mesh: "default"},
+				Spec: &meshservice_api.MeshService{
+					Selector: meshservice_api.Selector{},
+					Ports: []meshservice_api.Port{{
+						Port:        80,
+						TargetPort:  intstr.FromInt(8084),
+						AppProtocol: core_mesh.ProtocolHTTP,
+						Name:        "test-port",
+					}},
+					Identities: []meshservice_api.MeshServiceIdentity{
+						{
+							Type:  meshservice_api.MeshServiceIdentityServiceTagType,
+							Value: "backend",
+						},
+						{
+							Type:  meshservice_api.MeshServiceIdentityServiceTagType,
+							Value: "other-backend",
+						},
+					},
+				},
+				Status: &meshservice_api.MeshServiceStatus{
+					VIPs: []meshservice_api.VIP{{
+						IP: "10.0.0.1",
+					}},
+				},
+			}
+
+			meshExtSvc := meshexternalservice_api.MeshExternalServiceResource{
+				Meta: &test_model.ResourceMeta{Name: "example", Mesh: "default"},
+				Spec: &meshexternalservice_api.MeshExternalService{
+					Match: meshexternalservice_api.Match{
+						Type:     pointer.To(meshexternalservice_api.HostnameGeneratorType),
+						Port:     9090,
+						Protocol: core_mesh.ProtocolHTTP,
+					},
+					Endpoints: []meshexternalservice_api.Endpoint{
+						{
+							Address: "example.com",
+							Port:    pointer.To(meshexternalservice_api.Port(10000)),
+						},
+					},
+				},
+				Status: &meshexternalservice_api.MeshExternalServiceStatus{
+					VIP: meshexternalservice_api.VIP{
+						IP: "10.20.20.1",
+					},
+				},
+			}
+
+			dp, proxy := dppForGateway()
+			proxy.Policies = core_xds.MatchedPolicies{
+				Dynamic: core_xds.PluginOriginatedPolicies{},
+			}
+			proxy.Policies.Dynamic[api.MeshHTTPRouteType] = xds.TypedMatchingPolicies{
+				Type: api.MeshHTTPRouteType,
+				ToRules: core_rules.ToRules{
+					ResourceRules: map[core_model.TypedResourceIdentifier]core_rules.ResourceRule{
+						backendMeshServiceIdentifier: {
+							Origin: []core_rules.Origin{
+								{Resource: &test_model.ResourceMeta{Mesh: "default", Name: "http-route"}},
+							},
+							BackendRefOriginIndex: map[core_rules.MatchesHash]int{
+								core_rules.MatchesHash(api.HashMatches([]api.Match{{Path: &api.PathMatch{Type: api.PathPrefix, Value: "/v1"}}})): 0,
+							},
+							Conf: []interface{}{
+								api.PolicyDefault{
+									Rules: []api.Rule{
+										{
+											Matches: []api.Match{{
+												Path: &api.PathMatch{
+													Type:  api.PathPrefix,
+													Value: "/v1",
+												},
+											}},
+											Default: api.RuleConf{
+												BackendRefs: &[]common_api.BackendRef{{
+													TargetRef: builders.TargetRefMeshExternalService("example"),
+													Weight:    pointer.To(uint(100)),
+												}},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			}
+
+			egress := builders.ZoneEgress().WithPort(10002).Build()
+			mc := meshContextWithResources(dp.Build(), &meshExtSvc, &meshSvc, egress)
+
+			return outboundsTestCase{
+				xdsContext: *xds_builders.Context().WithMeshContext(mc).Build(),
+				proxy:      proxy,
+			}
+		}()),
 		Entry("meshexternalservice-with-tls", func() outboundsTestCase {
 			meshExtSvc := meshexternalservice_api.MeshExternalServiceResource{
 				Meta: &test_model.ResourceMeta{Name: "example", Mesh: "default"},
@@ -561,7 +777,7 @@ var _ = Describe("MeshHTTPRoute", func() {
 				},
 			}
 
-			dp, proxy := dppForMeshExternalService(&meshExtSvc)
+			dp, proxy := dppForEntity(core_model.NewTypedResourceIdentifier(&meshExtSvc))
 			egress := builders.ZoneEgress().WithPort(10002).Build()
 			mc := meshContextWithResources(dp.Build(), &meshExtSvc, egress)
 
@@ -599,7 +815,7 @@ var _ = Describe("MeshHTTPRoute", func() {
 				},
 			}
 
-			dp, proxy := dppForMeshExternalService(&meshExtSvc)
+			dp, proxy := dppForEntity(core_model.NewTypedResourceIdentifier(&meshExtSvc))
 			egress := builders.ZoneEgress().WithPort(10002).Build()
 			mc := meshContextWithResources(dp.Build(), &meshExtSvc, egress)
 
@@ -657,7 +873,7 @@ var _ = Describe("MeshHTTPRoute", func() {
 				},
 			}
 
-			dp, proxy := dppForMeshExternalService(&meshExtSvc)
+			dp, proxy := dppForEntity(core_model.NewTypedResourceIdentifier(&meshExtSvc))
 			egress := builders.ZoneEgress().WithPort(10002).Build()
 			mc := meshContextWithResources(dp.Build(), &meshExtSvc, egress)
 
@@ -2450,7 +2666,7 @@ func meshContextWithResources(resources ...core_model.Resource) *xds_context.Mes
 	return &mc
 }
 
-func dppForMeshExternalService(mes *meshexternalservice_api.MeshExternalServiceResource) (*builders.DataplaneBuilder, *core_xds.Proxy) {
+func dppForEntity(identifier core_model.TypedResourceIdentifier) (*builders.DataplaneBuilder, *core_xds.Proxy) {
 	dp := builders.Dataplane().
 		WithName("web-01").
 		WithAddress("192.168.0.2").
@@ -2467,9 +2683,27 @@ func dppForMeshExternalService(mes *meshexternalservice_api.MeshExternalServiceR
 			{
 				Address:  "10.20.20.1",
 				Port:     9090,
-				Resource: pointer.To(core_model.NewTypedResourceIdentifier(mes)),
+				Resource: pointer.To(identifier),
 			},
 		}).
+		WithSecretsTracker(envoy.NewSecretsTracker("default", nil)).
+		WithMetadata(&core_xds.DataplaneMetadata{
+			SystemCaPath: "/tmp/ca-certs.crt",
+		}).
+		Build()
+
+	return dp, proxy
+}
+
+func dppForGateway() (*builders.DataplaneBuilder, *core_xds.Proxy) {
+	dp := builders.Dataplane().
+		WithDelegatedGateway("delegated-gateway").
+		WithName("delegated-gateway").
+		WithTransparentProxying(15001, 15006, "ipv4").
+		WithAddress("192.168.0.3")
+
+	proxy := xds_builders.Proxy().
+		WithDataplane(dp).
 		WithSecretsTracker(envoy.NewSecretsTracker("default", nil)).
 		WithMetadata(&core_xds.DataplaneMetadata{
 			SystemCaPath: "/tmp/ca-certs.crt",

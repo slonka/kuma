@@ -2,9 +2,9 @@ package meshroute
 
 import (
 	"fmt"
-
 	common_api "github.com/kumahq/kuma/api/common/v1alpha1"
 	mesh_proto "github.com/kumahq/kuma/api/mesh/v1alpha1"
+	"github.com/kumahq/kuma/pkg/core"
 	core_mesh "github.com/kumahq/kuma/pkg/core/resources/apis/mesh"
 	core_model "github.com/kumahq/kuma/pkg/core/resources/model"
 	core_xds "github.com/kumahq/kuma/pkg/core/xds"
@@ -73,6 +73,7 @@ func CollectServices(
 ) []DestinationService {
 	var dests []DestinationService
 	for _, outbound := range proxy.Outbounds {
+		core.Log.Info("outbound", "outbound", outbound)
 		var destinationService *DestinationService
 		if outbound.LegacyOutbound != nil {
 			destinationService = collectServiceTagService(outbound, meshCtx)
@@ -90,6 +91,7 @@ func CollectServices(
 			dests = append(dests, *destinationService)
 		}
 	}
+	core.Log.Info("dest", "dest", dests)
 	return dests
 }
 

@@ -2,6 +2,7 @@ package v1alpha1
 
 import (
 	"context"
+	"github.com/kumahq/kuma/pkg/core"
 
 	"github.com/pkg/errors"
 
@@ -51,6 +52,8 @@ func (p plugin) Apply(rs *core_xds.ResourceSet, xdsCtx xds_context.Context, prox
 	// method and therefore are of the
 	// `ToRouteRule` type, where rules have been appended together.
 	policies := proxy.Policies.Dynamic[api.MeshHTTPRouteType]
+
+	core.Log.Info("matched policies", "policies", policies)
 
 	// Only fallback if we have TrafficRoutes & No MeshHTTPRoutes
 	if len(xdsCtx.Mesh.Resources.TrafficRoutes().Items) != 0 && len(policies.ToRules.Rules) == 0 && len(policies.GatewayRules.ToRules.ByListenerAndHostname) == 0 {
