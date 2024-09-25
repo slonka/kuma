@@ -326,6 +326,25 @@ violations:
     message: must be between 0 and 100
 `,
 			}),
+			Entry("sampling is a percentage", testCase{
+				inputYaml: `
+targetRef:
+  kind: MeshService
+  name: backend
+default:
+  backends:
+    - type: Datadog
+      datadog:
+        url: http://intake.datadoghq.eu:443
+  sampling:
+    overall: 80%
+`,
+				expected: `
+violations:
+  - field: spec.default.sampling.overall
+    message: string is not a number
+`,
+			}),
 			Entry("sampling invalid string", testCase{
 				inputYaml: `
 targetRef:
