@@ -7,12 +7,15 @@ import (
 	"github.com/kumahq/kuma/api/common/v1alpha1"
 	common_tls "github.com/kumahq/kuma/api/common/v1alpha1/tls"
 	hostnamegenerator_api "github.com/kumahq/kuma/pkg/core/resources/apis/hostnamegenerator/api/v1alpha1"
+	core_mesh "github.com/kumahq/kuma/pkg/core/resources/apis/mesh"
 )
 
 // MeshExternalService
 // +kuma:policy:is_policy=false
 // +kuma:policy:allowed_on_system_namespace_only=true
 // +kuma:policy:has_status=true
+// +kuma:policy:is_referenceable_in_to=true
+// +kubebuilder:printcolumn:name=Hostname,type=string,JSONPath=".status.addresses[0].hostname"
 type MeshExternalService struct {
 	// Match defines traffic that should be routed through the sidecar.
 	Match Match `json:"match"`
@@ -31,16 +34,6 @@ const (
 	HostnameGeneratorType MatchType = "HostnameGenerator"
 )
 
-// +kubebuilder:validation:Enum=tcp;grpc;http;http2
-type ProtocolType string
-
-const (
-	TcpProtocol   ProtocolType = "tcp"
-	GrpcProtocol  ProtocolType = "grpc"
-	HttpProtocol  ProtocolType = "http"
-	Http2Protocol ProtocolType = "http2"
-)
-
 type Match struct {
 	// Type of the match, only `HostnameGenerator` is available at the moment.
 	// +kubebuilder:default=HostnameGenerator
@@ -49,7 +42,8 @@ type Match struct {
 	Port Port `json:"port"`
 	// Protocol defines a protocol of the communication. Possible values: `tcp`, `grpc`, `http`, `http2`.
 	// +kubebuilder:default=tcp
-	Protocol ProtocolType `json:"protocol,omitempty"`
+	// +kubebuilder:validation:Enum=tcp;grpc;http;http2
+	Protocol core_mesh.Protocol `json:"protocol,omitempty"`
 }
 
 type Extension struct {
@@ -70,7 +64,7 @@ type Endpoint struct {
 	// +kubebuilder:validation:MinLength=1
 	Address string `json:"address"`
 	// Port of the endpoint
-	Port *Port `json:"port,omitempty"`
+	Port Port `json:"port"`
 }
 
 type Tls struct {

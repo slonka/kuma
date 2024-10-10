@@ -50,8 +50,8 @@ func (p *DataplaneProxyBuilder) Build(ctx context.Context, key core_model.Resour
 
 	meshName := meshContext.Resource.GetMeta().GetName()
 
-	allMeshNames := []string{meshName}
-	for _, mesh := range meshContext.Resources.OtherMeshes().Items {
+	allMeshNames := []string{}
+	for _, mesh := range meshContext.Resources.Meshes().Items {
 		allMeshNames = append(allMeshNames, mesh.GetMeta().GetName())
 	}
 
@@ -110,7 +110,7 @@ func (p *DataplaneProxyBuilder) resolveRouting(
 
 func (p *DataplaneProxyBuilder) resolveVIPOutbounds(meshContext xds_context.MeshContext, dataplane *core_mesh.DataplaneResource) []*xds_types.Outbound {
 	if dataplane.Spec.Networking.GetTransparentProxying() == nil {
-		return dataplane.AsOutbounds()
+		return dataplane.AsOutbounds(meshContext.ResolveResourceIdentifier)
 	}
 	reachableServices := map[string]bool{}
 	for _, reachableService := range dataplane.Spec.Networking.TransparentProxying.ReachableServices {

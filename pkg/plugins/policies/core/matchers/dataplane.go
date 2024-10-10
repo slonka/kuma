@@ -48,7 +48,8 @@ func MatchedPolicies(
 	matchedPoliciesByGatewayListener := map[core_rules.InboundListenerHostname][]core_model.Resource{}
 	var dpPolicies []core_model.Resource
 
-	gateway := xds_topology.SelectGateway(resources.Gateways().Items, dpp.Spec.Matches)
+	zoneGateways := filterGatewaysByZone(resources.Gateways().Items, dpp)
+	gateway := xds_topology.SelectGateway(zoneGateways, dpp.Spec.Matches)
 	for _, policy := range policies.GetItems() {
 		if !mpOpts.IncludeShadow && core_model.IsShadowedResource(policy) {
 			continue
@@ -119,6 +120,25 @@ func MatchedPolicies(
 	}, nil
 }
 
+func filterGatewaysByZone(gateways []*core_mesh.MeshGatewayResource, dpp *core_mesh.DataplaneResource) []*core_mesh.MeshGatewayResource {
+	if gateways == nil {
+		return gateways
+	}
+	var filtered []*core_mesh.MeshGatewayResource
+	dppZone := dpp.GetMeta().GetLabels()[mesh_proto.ZoneTag]
+	for _, gateway := range gateways {
+		gwOrigin, ok := gateway.GetMeta().GetLabels()[mesh_proto.ResourceOriginLabel]
+		if !ok || gwOrigin == string(mesh_proto.GlobalResourceOrigin) {
+			filtered = append(filtered, gateway)
+			continue
+		}
+		if gwZone, ok := gateway.GetMeta().GetLabels()[mesh_proto.ZoneTag]; ok && gwZone == dppZone {
+			filtered = append(filtered, gateway)
+		}
+	}
+	return filtered
+}
+
 // dppSelectedByPolicy returns a list of inbounds of DPP that are selected by the top-level targetRef
 // and whether a delegated gateway is selected
 func dppSelectedByPolicy(
@@ -128,7 +148,10 @@ func dppSelectedByPolicy(
 	gateway *core_mesh.MeshGatewayResource,
 	referencableResources xds_context.Resources,
 ) ([]core_rules.InboundListener, []core_rules.InboundListenerHostname, bool, error) {
-	if !ddpSelectedByNamespace(meta, dpp) {
+	if !dppSelectedByZone(meta, dpp, gateway) {
+		return []core_rules.InboundListener{}, nil, false, nil
+	}
+	if !dppSelectedByNamespace(meta, dpp) {
 		return []core_rules.InboundListener{}, nil, false, nil
 	}
 	switch ref.Kind {
@@ -175,12 +198,39 @@ func dppSelectedByPolicy(
 	}
 }
 
-func ddpSelectedByNamespace(meta core_model.ResourceMeta, dpp *core_mesh.DataplaneResource) bool {
+func dppSelectedByNamespace(meta core_model.ResourceMeta, dpp *core_mesh.DataplaneResource) bool {
 	switch meta.GetLabels()[mesh_proto.PolicyRoleLabel] {
 	case string(mesh_proto.ConsumerPolicyRole), string(mesh_proto.WorkloadOwnerPolicyRole):
 		ns, ok := meta.GetLabels()[mesh_proto.KubeNamespaceTag]
 		return ok && ns == dpp.GetMeta().GetLabels()[mesh_proto.KubeNamespaceTag]
 	default:
+		return true
+	}
+}
+
+func dppSelectedByZone(policyMeta core_model.ResourceMeta, dpp *core_mesh.DataplaneResource, gateway *core_mesh.MeshGatewayResource) bool {
+	switch core_model.PolicyRole(policyMeta) {
+	case mesh_proto.ProducerPolicyRole:
+		return true
+	default:
+		if dpp.GetMeta() == nil && gateway == nil {
+			return true
+		}
+		meta := dpp.GetMeta()
+		if gateway != nil {
+			meta = gateway.GetMeta()
+		}
+		// we should return true once dpp has no origin.
+		// Resource that cannot be created on zone(global one) doesn't have it
+		origin, ok := meta.GetLabels()[mesh_proto.ResourceOriginLabel]
+		if !ok || origin == string(mesh_proto.GlobalResourceOrigin) {
+			return true
+		}
+		policyOrigin, ok := policyMeta.GetLabels()[mesh_proto.ResourceOriginLabel]
+		if ok && policyOrigin == string(mesh_proto.ZoneResourceOrigin) {
+			zone, ok := policyMeta.GetLabels()[mesh_proto.ZoneTag]
+			return ok && meta.GetLabels()[mesh_proto.ZoneTag] == zone
+		}
 		return true
 	}
 }

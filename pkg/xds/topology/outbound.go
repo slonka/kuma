@@ -127,9 +127,7 @@ func BuildEdsEndpointMap(
 
 	fillRemoteMeshServices(outbound, meshServices, zoneIngresses, mesh, localZone)
 
-	if mesh.ZoneEgressEnabled() {
-		fillExternalServicesOutboundsThroughEgress(outbound, externalServices, meshExternalServices, zoneEgresses, mesh, localZone)
-	}
+	fillExternalServicesOutboundsThroughEgress(outbound, externalServices, meshExternalServices, zoneEgresses, mesh, localZone)
 
 	// it has to be last because it reuses endpoints for other cases
 	fillMeshMultiZoneServices(outbound, meshServicesByName, meshMultiZoneServices, localZone)
@@ -650,7 +648,7 @@ func createMeshExternalServiceEndpoint(
 	zone string,
 ) error {
 	es := &core_xds.ExternalService{
-		Protocol:      core_mesh.ParseProtocol(string(mes.Spec.Match.Protocol)),
+		Protocol:      mes.Spec.Match.Protocol,
 		OwnerResource: pointer.To(core_rules.UniqueKey(mes, "")),
 	}
 	tags := maps.Clone(mes.Meta.GetLabels())
@@ -658,7 +656,6 @@ func createMeshExternalServiceEndpoint(
 		tags = map[string]string{}
 	}
 	meshName := mesh.GetMeta().GetName()
-	name := mes.Meta.GetName()
 	tls := mes.Spec.Tls
 	if tls != nil && tls.Enabled {
 		var caCert, clientCert, clientKey []byte
@@ -735,13 +732,13 @@ func createMeshExternalServiceEndpoint(
 		}
 		outboundEndpoint := &core_xds.Endpoint{
 			Target:          endpoint.Address,
-			Port:            uint32(*endpoint.Port),
+			Port:            uint32(endpoint.Port),
 			Weight:          1,
 			ExternalService: es,
 			Tags:            tags,
 			Locality:        GetLocality(zone, getZone(tags), mesh.LocalityAwareLbEnabled()),
 		}
-		outbounds[name] = append(outbounds[name], *outboundEndpoint)
+		outbounds[mes.DestinationName(uint32(mes.Spec.Match.Port))] = append(outbounds[mes.DestinationName(uint32(mes.Spec.Match.Port))], *outboundEndpoint)
 	}
 	return nil
 }
@@ -771,35 +768,37 @@ func fillExternalServicesOutboundsThroughEgress(
 	mesh *core_mesh.MeshResource,
 	localZone string,
 ) {
-	for _, externalService := range externalServices {
-		// deep copy map to not modify tags in ExternalService.
-		serviceTags := maps.Clone(externalService.Spec.GetTags())
-		serviceName := serviceTags[mesh_proto.ServiceTag]
-		locality := GetLocality(localZone, getZone(serviceTags), mesh.LocalityAwareLbEnabled())
+	if mesh.ZoneEgressEnabled() {
+		for _, externalService := range externalServices {
+			// deep copy map to not modify tags in ExternalService.
+			serviceTags := maps.Clone(externalService.Spec.GetTags())
+			serviceName := serviceTags[mesh_proto.ServiceTag]
+			locality := GetLocality(localZone, getZone(serviceTags), mesh.LocalityAwareLbEnabled())
 
-		for _, ze := range zoneEgresses {
-			zeNetworking := ze.Spec.GetNetworking()
-			zeAddress := zeNetworking.GetAddress()
-			zePort := zeNetworking.GetPort()
+			for _, ze := range zoneEgresses {
+				zeNetworking := ze.Spec.GetNetworking()
+				zeAddress := zeNetworking.GetAddress()
+				zePort := zeNetworking.GetPort()
 
-			endpoint := core_xds.Endpoint{
-				Target: zeAddress,
-				Port:   zePort,
-				Tags:   serviceTags,
-				// AS it's a role of zone egress to load balance traffic between
-				// instances, we can safely set weight to 1
-				Weight:          1,
-				Locality:        locality,
-				ExternalService: &core_xds.ExternalService{},
+				endpoint := core_xds.Endpoint{
+					Target: zeAddress,
+					Port:   zePort,
+					Tags:   serviceTags,
+					// AS it's a role of zone egress to load balance traffic between
+					// instances, we can safely set weight to 1
+					Weight:          1,
+					Locality:        locality,
+					ExternalService: &core_xds.ExternalService{},
+				}
+
+				outbound[serviceName] = append(outbound[serviceName], endpoint)
 			}
-
-			outbound[serviceName] = append(outbound[serviceName], endpoint)
 		}
 	}
 	for _, mes := range meshExternalServices {
 		// deep copy map to not modify tags in ExternalService.
 		serviceTags := maps.Clone(mes.Meta.GetLabels())
-		serviceName := mes.Meta.GetName()
+		serviceName := mes.DestinationName(uint32(mes.Spec.Match.Port))
 		locality := GetLocality(localZone, getZone(serviceTags), mesh.LocalityAwareLbEnabled())
 
 		for _, ze := range zoneEgresses {
@@ -816,7 +815,8 @@ func fillExternalServicesOutboundsThroughEgress(
 				Weight:   1,
 				Locality: locality,
 				ExternalService: &core_xds.ExternalService{
-					Protocol: core_mesh.ParseProtocol(string(mes.Spec.Match.Protocol)),
+					Protocol:      mes.Spec.Match.Protocol,
+					OwnerResource: pointer.To(core_rules.UniqueKey(mes, "")),
 				},
 			}
 

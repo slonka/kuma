@@ -8,12 +8,13 @@ import (
 	"github.com/asaskevich/govalidator"
 
 	common_tls "github.com/kumahq/kuma/api/common/v1alpha1/tls"
+	core_mesh "github.com/kumahq/kuma/pkg/core/resources/apis/mesh"
 	"github.com/kumahq/kuma/pkg/core/validators"
 	"github.com/kumahq/kuma/pkg/util/pointer"
 )
 
 var (
-	allMatchProtocols    = []string{string(TcpProtocol), string(GrpcProtocol), string(HttpProtocol), string(Http2Protocol)}
+	allMatchProtocols    = []string{core_mesh.ProtocolTCP, core_mesh.ProtocolGRPC, core_mesh.ProtocolHTTP, core_mesh.ProtocolHTTP2}
 	allVerificationModes = []string{string(TLSVerificationSkipSAN), string(TLSVerificationSkipCA), string(TLSVerificationSkipAll), string(TLSVerificationSecured)}
 	allSANMatchTypes     = []string{string(SANMatchPrefix), string(SANMatchExact)}
 )
@@ -98,16 +99,14 @@ func validateEndpoints(endpoints []Endpoint) validators.ValidationError {
 
 	for i, endpoint := range endpoints {
 		if govalidator.IsIP(endpoint.Address) {
-			if endpoint.Port == nil {
-				verr.AddViolationAt(validators.Root().Index(i).Field("port"), validators.MustBeDefined+" when endpoint is an IP")
-			} else if *endpoint.Port == 0 || *endpoint.Port > math.MaxUint16 {
+			if endpoint.Port == 0 || endpoint.Port > math.MaxUint16 {
 				verr.AddViolationAt(validators.Root().Index(i).Field("port"), "port must be a valid (1-65535)")
 			}
 		}
 
 		if govalidator.IsDNSName(endpoint.Address) {
-			if endpoint.Port == nil {
-				verr.AddViolationAt(validators.Root().Index(i).Field("port"), validators.MustBeDefined+" when endpoint is a hostname")
+			if endpoint.Port == 0 || endpoint.Port > math.MaxUint16 {
+				verr.AddViolationAt(validators.Root().Index(i).Field("port"), "port must be a valid (1-65535)")
 			}
 		}
 

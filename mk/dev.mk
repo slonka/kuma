@@ -7,7 +7,7 @@ GIT_TAG = $(word 2, $(BUILD_INFO))
 GIT_COMMIT = $(word 3, $(BUILD_INFO))
 BUILD_DATE = $(word 4, $(BUILD_INFO))
 CI_TOOLS_VERSION = $(word 5, $(BUILD_INFO))
-ENVOY_VERSION ?= 1.30.4-k.1
+ENVOY_VERSION ?= 1.30.6
 KUMA_CHARTS_URL ?= https://kumahq.github.io/charts
 CHART_REPO_NAME ?= kuma
 PROJECT_NAME ?= kuma
@@ -130,10 +130,12 @@ dev/sync-demo:
 	rm app/kumactl/data/install/k8s/demo/*.yaml
 	curl -s --fail https://raw.githubusercontent.com/kumahq/kuma-counter-demo/master/demo.yaml | \
 		sed 's/"local"/"{{ .Zone }}"/g' | \
-		sed 's/\([^/]\)kuma-demo/\1{{ .Namespace }}/g' \
+		sed 's/\([^/]\)kuma-demo/\1{{ .Namespace }}/g' | \
+		sed 's/\([^/]\)kuma-system/\1{{ .SystemNamespace }}/g' \
 		> app/kumactl/data/install/k8s/demo/demo.yaml
 	curl -s --fail https://raw.githubusercontent.com/kumahq/kuma-counter-demo/master/gateway.yaml | \
-		sed 's/\([^/]\)kuma-demo/\1{{ .Namespace }}/g' \
+		sed 's/\([^/]\)kuma-demo/\1{{ .Namespace }}/g' | \
+		sed 's/\([^/]\)kuma-system/\1{{ .SystemNamespace }}/g' \
 		> app/kumactl/data/install/k8s/demo/gateway.yaml
 
 .PHONY: dev/set-kuma-helm-repo

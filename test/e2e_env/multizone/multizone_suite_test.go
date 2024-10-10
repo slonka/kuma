@@ -22,6 +22,7 @@ import (
 	"github.com/kumahq/kuma/test/e2e_env/multizone/meshtls"
 	"github.com/kumahq/kuma/test/e2e_env/multizone/meshtrafficpermission"
 	"github.com/kumahq/kuma/test/e2e_env/multizone/ownership"
+	"github.com/kumahq/kuma/test/e2e_env/multizone/producer"
 	"github.com/kumahq/kuma/test/e2e_env/multizone/reachablebackends"
 	"github.com/kumahq/kuma/test/e2e_env/multizone/resilience"
 	multizone_sync "github.com/kumahq/kuma/test/e2e_env/multizone/sync"
@@ -53,6 +54,7 @@ var (
 	_ = Describe("TrafficPermission", trafficpermission.TrafficPermission, Ordered)
 	_ = Describe("TrafficRoute", trafficroute.TrafficRoute, Ordered)
 	_ = Describe("MeshHTTPRoute", meshhttproute.Test, Ordered)
+	_ = Describe("MeshHTTPRoute MeshService", meshhttproute.MeshService, Ordered)
 	_ = Describe("MeshTCPRoute", meshtcproute.Test, Ordered)
 	_ = Describe("InboundPassthrough", inbound_communication.InboundPassthrough, Ordered)
 	_ = Describe("InboundPassthroughDisabled", inbound_communication.InboundPassthroughDisabled, Ordered)
@@ -75,11 +77,13 @@ var (
 	_ = Describe("Defaults", defaults.Defaults, Ordered)
 	_ = Describe("MeshService Sync", meshservice.Sync, Ordered)
 	_ = Describe("MeshService Connectivity", meshservice.Connectivity, Ordered)
+	_ = Describe("MeshService Migration", meshservice.Migration, Ordered)
 	_ = Describe("Targeting real MeshService in policies", meshservice.MeshServiceTargeting, Ordered)
 	_ = Describe("MeshMultiZoneService Connectivity", meshmultizoneservice.Connectivity, Ordered)
 	_ = Describe("MeshMultiZoneService MeshLbStrategy", localityawarelb.MeshMzService, Ordered)
 	_ = Describe("Available services", connectivity.AvailableServices, Ordered)
 	_ = Describe("ReachableBackends", reachablebackends.ReachableBackends, Ordered)
+	_ = Describe("Producer Policy Flow", producer.ProducerPolicyFlow, Ordered)
 	_ = Describe("MeshServiceReachableBackends", reachablebackends.MeshServicesWithReachableBackendsOption, Ordered)
 	_ = Describe("MeshTLS", meshtls.MeshTLS, Ordered)
 )

@@ -20,77 +20,6 @@ import (
 	"github.com/kumahq/kuma/pkg/transparentproxy/consts"
 )
 
-var _ json.Unmarshaler = &Owner{}
-
-type Owner struct {
-	UID string `json:"uid"`
-	// Indicates if the property was set. This replaces similar logic previously
-	// handled by Cobra library, as the value can now also be set in the config
-	// file.
-	changed bool
-}
-
-func (c *Owner) Changed() bool {
-	return c.changed
-}
-
-func (c *Owner) String() string {
-	return c.UID
-}
-
-func (c *Owner) Type() string {
-	return "uid|username"
-}
-
-func (c *Owner) Set(s string) error {
-	var ok bool
-
-	c.changed = true
-
-	if s != "" {
-		if c.UID, ok = findUserUID(s); ok {
-			return nil
-		}
-
-		return errors.Errorf("the specified UID or username ('%s') does not refer to a valid user on the host", s)
-	}
-
-	if c.UID, ok = findUserUID(consts.OwnerDefaultUID); ok {
-		return nil
-	}
-
-	if c.UID, ok = findUserUID(consts.OwnerDefaultUsername); ok {
-		return nil
-	}
-
-	return errors.Errorf(
-		"no UID or username provided, and user with the default UID ('%s') or username ('%s') could not be found",
-		consts.OwnerDefaultUID,
-		consts.OwnerDefaultUsername,
-	)
-}
-
-func (c *Owner) UnmarshalJSON(bs []byte) error {
-	var jsonValue interface{}
-
-	if err := json.Unmarshal(bs, &jsonValue); err != nil {
-		return err
-	}
-
-	switch jsonValue.(type) {
-	case string, float64:
-		return c.Set(fmt.Sprint(jsonValue))
-	}
-
-	return errors.Errorf("invalid type for provided value '%s'; expected string or numeric value for UID or username", string(bs))
-}
-
-// Using a value receiver here is intentional, as we are working with the Owner value itself,
-// not a pointer, for JSON marshaling
-func (c Owner) MarshalJSON() ([]byte, error) {
-	return json.Marshal(c.UID)
-}
-
 // ValueOrRangeList is a format acceptable by iptables in which
 // single values are denoted by just a number e.g. 1000
 // multiple values (lists) are denoted by a number separated by a comma e.g. 1000,1001
@@ -159,7 +88,14 @@ func (p *Ports) Type() string { return "uint16[,...]" }
 
 func (p *Ports) Set(s string) error {
 	*p = nil
+	return p.append(s)
+}
 
+func (p *Ports) Append(s string) error {
+	return p.append(s)
+}
+
+func (p *Ports) append(s string) error {
 	if s = strings.TrimSpace(s); s == "" {
 		return nil
 	}
@@ -274,21 +210,15 @@ type DNS struct {
 	CaptureAll             bool   `json:"captureAll" split_words:"true"`             // KUMA_TRANSPARENT_PROXY_REDIRECT_DNS_CAPTURE_ALL
 	SkipConntrackZoneSplit bool   `json:"skipConntrackZoneSplit" split_words:"true"` // KUMA_TRANSPARENT_PROXY_REDIRECT_DNS_SKIP_CONNTRACK_ZONE_SPLIT
 	ResolvConfigPath       string `json:"resolvConfigPath" split_words:"true"`       // KUMA_TRANSPARENT_PROXY_REDIRECT_DNS_RESOLV_CONFIG_PATH
-	// The iptables chain where the upstream DNS requests should be directed to.
-	// It is only applied for IP V4. Use with care. (default "RETURN")
-	UpstreamTargetChain string `json:"-" ignored:"true"`
 }
 
 type InitializedDNS struct {
 	DNS
-	Servers            []string
+	Servers            []net.IP
 	ConntrackZoneSplit bool
 	Enabled            bool
 }
 
-// Initialize initializes the ServersIPv4 and ServersIPv6 fields by parsing
-// the nameservers from the file specified in the ResolvConfigPath field of
-// the input DNS struct
 func (c DNS) Initialize(
 	l Logger,
 	executables InitializedExecutablesIPvX,
@@ -296,37 +226,37 @@ func (c DNS) Initialize(
 ) (InitializedDNS, error) {
 	initialized := InitializedDNS{DNS: c, Enabled: c.Enabled}
 
-	// We don't have to continue initialization if the DNS traffic shouldn't be
-	// redirected
+	// DNS redirection is disabled, no further initialization is needed
 	if !c.Enabled {
 		return initialized, nil
 	}
 
-	if !c.SkipConntrackZoneSplit {
-		initialized.ConntrackZoneSplit = executables.Functionality.ConntrackZoneSplit()
-		if !initialized.ConntrackZoneSplit {
-			l.Warn("conntrack zone splitting is disabled. Functionality requires the 'conntrack' iptables module")
-		}
+	switch {
+	case !c.SkipConntrackZoneSplit && !executables.Functionality.ConntrackZoneSplit():
+		l.Warn("conntrack zone splitting is disabled. This requires the 'conntrack' iptables module")
+	case !c.SkipConntrackZoneSplit && executables.Functionality.Chains.DockerOutput && c.CaptureAll:
+		l.Warn("conntrack zone splitting is unsupported when capturing all DNS traffic inside Docker containers with custom networks")
+	case !c.SkipConntrackZoneSplit:
+		initialized.ConntrackZoneSplit = true
 	}
 
-	// We don't have to get DNS servers if we want to capture all DNS traffic
+	// No need to retrieve DNS servers if all DNS traffic is being captured
 	if c.CaptureAll {
 		return initialized, nil
 	}
 
+	// Load DNS configuration from the resolv.conf file
 	dnsConfig, err := dns.ClientConfigFromFile(c.ResolvConfigPath)
 	if err != nil {
 		return initialized, errors.Wrapf(err, "unable to read file %s", c.ResolvConfigPath)
 	}
 
-	// Loop through each DNS server address parsed from the resolv.conf file
+	// Iterate over each DNS server address from the resolv.conf file
 	for _, address := range dnsConfig.Servers {
-		parsed := net.ParseIP(address)
-		// Check if the address matches the expected IP version.
-		// - If config is not for IPv6 and the address is IPv4, add to the list.
-		// - If config is for IPv6 and the address is IPv6, add to the list.
-		if !ipv6 && parsed.To4() != nil || ipv6 && parsed.To4() == nil {
-			initialized.Servers = append(initialized.Servers, address)
+		ip := net.ParseIP(address)
+		// Add the IP if it matches the expected IP version (IPv4 or IPv6)
+		if (!ipv6 && ip.To4() != nil) || (ipv6 && ip.To4() == nil) {
+			initialized.Servers = append(initialized.Servers, ip)
 		}
 	}
 
@@ -335,7 +265,7 @@ func (c DNS) Initialize(
 		initialized.ConntrackZoneSplit = false
 
 		l.Warnf(
-			"couldn't find any %s servers in %s file. Capturing %[1]s DNS traffic will be disabled",
+			"no %s DNS servers found in %s. DNS traffic capture for %[1]s will be disabled",
 			consts.IPTypeMap[ipv6],
 			c.ResolvConfigPath,
 		)
@@ -412,6 +342,30 @@ type Redirect struct {
 	VNet       VNet        `json:"vnet"`
 }
 
+// Custom Marshal logic to omit the VNet field from the JSON output if it contains
+// no networks. This approach ensures that empty fields are not rendered, since
+// we're working with a value type (Redirect) and not pointers, and we only include
+// VNet when it has meaningful data
+func (c Redirect) MarshalJSON() ([]byte, error) {
+	type ConfigAlias Redirect
+
+	type ConfigAliasOmitEmpty struct {
+		ConfigAlias
+		VNet any `json:"vnet,omitempty"`
+	}
+
+	result := ConfigAliasOmitEmpty{
+		ConfigAlias: ConfigAlias(c),
+		VNet:        c.VNet,
+	}
+
+	if len(c.VNet.Networks) == 0 {
+		result.VNet = nil
+	}
+
+	return json.Marshal(result)
+}
+
 type InitializedRedirect struct {
 	Redirect
 	DNS      InitializedDNS
@@ -457,14 +411,59 @@ func (c Redirect) Initialize(
 }
 
 type Ebpf struct {
-	Enabled            bool   `json:"enabled"`                               // KUMA_TRANSPARENT_PROXY_EBPF_ENABLED
-	InstanceIP         string `json:"instanceIP" envconfig:"instance_ip"`    // KUMA_TRANSPARENT_PROXY_EBPF_INSTANCE_IP
-	BPFFSPath          string `json:"bpffsPath" envconfig:"bpffs_path"`      // KUMA_TRANSPARENT_PROXY_EBPF_BPFFS_PATH
-	CgroupPath         string `json:"cgroupPath" split_words:"true"`         // KUMA_TRANSPARENT_PROXY_EBPF_CGROUP_PATH
-	ProgramsSourcePath string `json:"programsSourcePath" split_words:"true"` // KUMA_TRANSPARENT_PROXY_EBPF_PROGRAM_SOURCE_PATH
+	Enabled              bool   `json:"enabled"`                                                   // KUMA_TRANSPARENT_PROXY_EBPF_ENABLED
+	InstanceIP           string `json:"instanceIP" envconfig:"instance_ip"`                        // KUMA_TRANSPARENT_PROXY_EBPF_INSTANCE_IP
+	InstanceIPEnvVarName string `json:"instanceIPEnvVarName" envconfig:"instance_ip_env_var_name"` // KUMA_TRANSPARENT_PROXY_EBPF_INSTANCE_IP_ENV_VAR_NAME
+	BPFFSPath            string `json:"bpffsPath" envconfig:"bpffs_path"`                          // KUMA_TRANSPARENT_PROXY_EBPF_BPFFS_PATH
+	CgroupPath           string `json:"cgroupPath" split_words:"true"`                             // KUMA_TRANSPARENT_PROXY_EBPF_CGROUP_PATH
+	ProgramsSourcePath   string `json:"programsSourcePath" split_words:"true"`                     // KUMA_TRANSPARENT_PROXY_EBPF_PROGRAM_SOURCE_PATH
 	// The name of network interface which TC ebpf programs should bind to,
 	// when not provided, we'll try to automatically determine it
 	TCAttachIface string `json:"tcAttachIface" envconfig:"tc_attach_iface"` // KUMA_TRANSPARENT_PROXY_EBPF_TC_ATTACH_IFACE
+}
+
+func (c Ebpf) Initialize() (InitializedEbpf, error) {
+	if !c.Enabled {
+		return InitializedEbpf{}, nil
+	}
+
+	instanceIP := c.InstanceIP
+	defaultInstanceIPEnvVarName := "INSTANCE_IP"
+	switch {
+	case c.InstanceIP != "":
+		break
+	case c.InstanceIPEnvVarName != "" && os.Getenv(c.InstanceIPEnvVarName) == "":
+		return InitializedEbpf{}, errors.Errorf(
+			"environment variable '%s' does not contain an instance IP",
+			c.InstanceIPEnvVarName,
+		)
+	case c.InstanceIPEnvVarName == "" && os.Getenv(defaultInstanceIPEnvVarName) == "":
+		return InitializedEbpf{}, errors.New(
+			"no instance IP or environment variable containing instance IP specified",
+		)
+	case c.InstanceIPEnvVarName == "":
+		instanceIP = os.Getenv(defaultInstanceIPEnvVarName)
+	default:
+		instanceIP = os.Getenv(c.InstanceIPEnvVarName)
+	}
+
+	return InitializedEbpf{
+		Enabled:            c.Enabled,
+		InstanceIP:         instanceIP,
+		BPFFSPath:          c.BPFFSPath,
+		CgroupPath:         c.CgroupPath,
+		ProgramsSourcePath: c.ProgramsSourcePath,
+		TCAttachIface:      c.TCAttachIface,
+	}, nil
+}
+
+type InitializedEbpf struct {
+	Enabled            bool
+	InstanceIP         string
+	BPFFSPath          string
+	CgroupPath         string
+	ProgramsSourcePath string
+	TCAttachIface      string
 }
 
 type Log struct {
@@ -484,11 +483,23 @@ type Log struct {
 type Retry struct {
 	// MaxRetries specifies the number of retries after the initial attempt.
 	// A value of 0 means no retries, and only the initial attempt will be made.
-	MaxRetries int `json:"maxRetries" split_words:"true"` // KUMA_TRANSPARENT_PROXY_RETRY_MAX_RETRIES
+	MaxRetries uint `json:"maxRetries" split_words:"true"` // KUMA_TRANSPARENT_PROXY_RETRY_MAX_RETRIES
 	// SleepBetweenRetries defines the duration to wait between retry attempts.
 	// This delay helps in situations where immediate retries may not be
 	// beneficial, allowing time for transient issues to resolve.
 	SleepBetweenRetries config_types.Duration `json:"sleepBetweenRetries" split_words:"true"` // KUMA_TRANSPARENT_PROXY_RETRY_SLEEP_BETWEEN_RETRIES
+}
+
+type InitializedRetry struct {
+	MaxRetries          int
+	SleepBetweenRetries time.Duration
+}
+
+func (c Retry) Initialize() InitializedRetry {
+	return InitializedRetry{
+		MaxRetries:          int(c.MaxRetries),
+		SleepBetweenRetries: c.SleepBetweenRetries.Duration,
+	}
 }
 
 // Comments struct contains the configuration for iptables rule comments.
@@ -526,7 +537,7 @@ var _ core_config.Config = Config{}
 type Config struct {
 	core_config.BaseConfig
 
-	KumaDPUser Owner    `json:"kumaDPUser" envconfig:"kuma_dp_user"` // KUMA_TRANSPARENT_PROXY_KUMA_DP_USER
+	KumaDPUser string   `json:"kumaDPUser" envconfig:"kuma_dp_user"` // KUMA_TRANSPARENT_PROXY_KUMA_DP_USER
 	Redirect   Redirect `json:"redirect"`
 	Ebpf       Ebpf     `json:"ebpf"`
 	// DropInvalidPackets when enabled, kuma-dp will configure iptables to drop
@@ -598,6 +609,85 @@ type Config struct {
 	CNIMode      bool         `json:"cniMode,omitempty" envconfig:"cni_mode"`  // KUMA_TRANSPARENT_PROXY_CNI_MODE
 }
 
+func (c Config) WithStdout(stdout io.Writer) Config {
+	c.RuntimeStdout = stdout
+	return c
+}
+
+// Custom Marshal logic to avoid rendering empty values for specific fields.
+// Since we're working with a value type (Config) rather than pointers, this approach
+// ensures that unnecessary fields (like ebpf, comments, log, and executables) are omitted
+// from the JSON output when they are not enabled or contain no meaningful data
+func (c Config) MarshalJSON() ([]byte, error) {
+	type ConfigAlias Config
+
+	type ConfigAliasOmitEmpty struct {
+		ConfigAlias
+		Ebpf        any `json:"ebpf,omitempty"`
+		Comments    any `json:"comments,omitempty"`
+		Log         any `json:"log,omitempty"`
+		Executables any `json:"iptablesExecutables,omitempty"`
+	}
+
+	result := ConfigAliasOmitEmpty{
+		ConfigAlias: ConfigAlias(c),
+		Ebpf:        c.Ebpf,
+		Comments:    c.Comments,
+		Log:         c.Log,
+		Executables: c.Executables,
+	}
+
+	if !c.Ebpf.Enabled {
+		result.Ebpf = nil
+	}
+
+	if !c.Comments.Disabled {
+		result.Comments = nil
+	}
+
+	if !c.Log.Enabled {
+		result.Log = nil
+	}
+
+	if len(getNonEmptyPaths(&c.Executables)) == 0 {
+		result.Executables = nil
+	}
+
+	return json.Marshal(result)
+}
+
+func (c Config) InitializeKumaDPUser() (string, error) {
+	switch {
+	case c.CNIMode && c.KumaDPUser != "":
+		return c.KumaDPUser, nil
+	case c.CNIMode:
+		return consts.OwnerDefaultUID, nil
+	case c.KumaDPUser != "":
+		if v, ok := findUserUID(c.KumaDPUser); ok {
+			return v, nil
+		}
+
+		return "", errors.Errorf(
+			"the specified UID or username ('%s') does not refer to a valid user on the host",
+			c.KumaDPUser,
+		)
+	}
+
+	if v, ok := findUserUID(consts.OwnerDefaultUID); ok {
+		return v, nil
+	}
+
+	if v, ok := findUserUID(consts.OwnerDefaultUsername); ok {
+		return v, nil
+	}
+
+	return "", errors.Errorf(
+		"no UID or username provided, and user with the default UID ('%s') or username ('%s') could not be found",
+		consts.OwnerDefaultUID,
+		consts.OwnerDefaultUsername,
+	)
+}
+
 type IPFamilyMode string
 
 func (e *IPFamilyMode) UnmarshalJSON(bs []byte) error {
@@ -640,10 +730,14 @@ func (e *IPFamilyMode) Set(v string) error {
 	case string(IPFamilyModeDualStack), string(IPFamilyModeIPv4):
 		*e = IPFamilyMode(v)
 	default:
-		return errors.Errorf("must be one of '%s' or '%s'", IPFamilyModeDualStack, IPFamilyModeIPv4)
+		return errors.Errorf("must be one of %s", AllowedIPFamilyModes())
 	}
 
 	return nil
+}
+
+func AllowedIPFamilyModes() string {
+	return fmt.Sprintf("'%s' or '%s'", IPFamilyModeDualStack, IPFamilyModeIPv4)
 }
 
 // InitializedConfigIPvX extends the Config struct by adding fields that require
@@ -681,17 +775,18 @@ type InitializedConfigIPvX struct {
 	// LocalhostCIDR is a string representing the CIDR notation of the localhost
 	// address for the given IP version (IPv4 or IPv6). This is used to
 	// construct rules related to the loopback interface
-	LocalhostCIDR string
+	LocalhostCIDR net.IPNet
 	// InboundPassthroughCIDR is a string representing the CIDR notation of the
 	// address used for inbound passthrough traffic. This is used to construct
 	// rules allowing specific traffic to bypass normal proxying
-	InboundPassthroughCIDR string
+	InboundPassthroughCIDR net.IPNet
 	// Comments holds the processed configuration for iptables rule comments,
 	// indicating whether comments are enabled and the prefix to use for comment
 	// text. This helps in identifying and organizing iptables rules created by
 	// the transparent proxy, making them easier to manage and debug
 	Comments   InitializedComments
-	KumaDPUser Owner
+	Ebpf       InitializedEbpf
+	KumaDPUser string
 
 	enabled bool
 }
@@ -723,16 +818,16 @@ type InitializedConfig struct {
 }
 
 func (c Config) Initialize(ctx context.Context) (InitializedConfig, error) {
+	var kumaDPUser string
 	var err error
 
-	l := Logger{
-		stdout: c.RuntimeStdout,
-		stderr: c.RuntimeStderr,
-		maxTry: c.Retry.MaxRetries + 1,
+	if kumaDPUser, err = c.InitializeKumaDPUser(); err != nil {
+		return InitializedConfig{}, err
 	}
 
-	loggerIPv4 := l.WithPrefix(consts.IptablesCommandByFamily[false])
-	loggerIPv6 := l.WithPrefix(consts.IptablesCommandByFamily[true])
+	l := Logger{stdout: c.RuntimeStdout, stderr: c.RuntimeStderr}
+	loggerIPv4 := l.WithPrefix(consts.IptablesCommandByFamily[consts.IPv4])
+	loggerIPv6 := l.WithPrefix(consts.IptablesCommandByFamily[consts.IPv6])
 
 	loopbackInterfaceName, err := getLoopbackInterfaceName()
 	if err != nil {
@@ -757,11 +852,11 @@ func (c Config) Initialize(ctx context.Context) (InitializedConfig, error) {
 			Logger:                 loggerIPv4,
 			Executables:            executablesIPv4,
 			LoopbackInterfaceName:  loopbackInterfaceName,
-			LocalhostCIDR:          consts.LocalhostCIDRIPv4,
-			InboundPassthroughCIDR: consts.InboundPassthroughSourceAddressCIDRIPv4,
+			LocalhostCIDR:          consts.LocalhostAddress[consts.IPv4],
+			InboundPassthroughCIDR: consts.InboundPassthroughSourceAddress[consts.IPv4],
 			Comments:               c.Comments.Initialize(executablesIPv4),
 			DropInvalidPackets:     c.DropInvalidPackets && executablesIPv4.Functionality.Tables.Mangle,
-			KumaDPUser:             c.KumaDPUser,
+			KumaDPUser:             kumaDPUser,
 			Redirect:               redirectIPv4,
 			enabled:                true,
 		},
@@ -773,7 +868,7 @@ func (c Config) Initialize(ctx context.Context) (InitializedConfig, error) {
 		return initialized, nil
 	}
 
-	if ok, err := hasLocalIPv6(); !ok || err != nil {
+	if ok, err := HasLocalIPv6(); !ok || err != nil {
 		if c.Verbose {
 			loggerIPv6.Warn("IPv6 initialization skipped due to missing or faulty IPv6 support:", err)
 		}
@@ -804,11 +899,11 @@ func (c Config) Initialize(ctx context.Context) (InitializedConfig, error) {
 		Logger:                 loggerIPv6,
 		Executables:            executablesIPv6,
 		LoopbackInterfaceName:  loopbackInterfaceName,
-		LocalhostCIDR:          consts.LocalhostCIDRIPv6,
-		InboundPassthroughCIDR: consts.InboundPassthroughSourceAddressCIDRIPv6,
+		LocalhostCIDR:          consts.LocalhostAddress[consts.IPv6],
+		InboundPassthroughCIDR: consts.InboundPassthroughSourceAddress[consts.IPv6],
 		Comments:               c.Comments.Initialize(executablesIPv6),
 		DropInvalidPackets:     c.DropInvalidPackets && executablesIPv6.Functionality.Tables.Mangle,
-		KumaDPUser:             c.KumaDPUser,
+		KumaDPUser:             kumaDPUser,
 		Redirect:               redirectIPv6,
 		enabled:                true,
 	}
@@ -818,28 +913,35 @@ func (c Config) Initialize(ctx context.Context) (InitializedConfig, error) {
 
 func DefaultConfig() Config {
 	return Config{
-		KumaDPUser: Owner{UID: ""},
+		KumaDPUser:   "",
+		IPFamilyMode: IPFamilyModeDualStack,
 		Redirect: Redirect{
 			NamePrefix: consts.IptablesChainsPrefix,
 			Inbound: TrafficFlow{
-				Enabled:           true,
-				Port:              Port(consts.DefaultRedirectInbountPort),
-				ChainName:         "INBOUND",
-				RedirectChainName: "INBOUND_REDIRECT",
-				ExcludePorts:      Ports{},
-				IncludePorts:      Ports{},
+				Enabled:                       true,
+				Port:                          Port(consts.DefaultRedirectInbountPort),
+				ChainName:                     "INBOUND",
+				RedirectChainName:             "INBOUND_REDIRECT",
+				IncludePorts:                  Ports{},
+				ExcludePorts:                  Ports{},
+				ExcludePortsForUIDs:           []string{},
+				ExcludePortsForIPs:            []string{},
+				InsertRedirectInsteadOfAppend: false,
 			},
 			Outbound: TrafficFlow{
-				Enabled:           true,
-				Port:              Port(consts.DefaultRedirectOutboundPort),
-				ChainName:         "OUTBOUND",
-				RedirectChainName: "OUTBOUND_REDIRECT",
-				ExcludePorts:      Ports{},
-				IncludePorts:      Ports{},
+				Enabled:                       true,
+				Port:                          Port(consts.DefaultRedirectOutboundPort),
+				ChainName:                     "OUTBOUND",
+				RedirectChainName:             "OUTBOUND_REDIRECT",
+				IncludePorts:                  Ports{},
+				ExcludePorts:                  Ports{},
+				ExcludePortsForUIDs:           []string{},
+				ExcludePortsForIPs:            []string{},
+				InsertRedirectInsteadOfAppend: false,
 			},
 			DNS: DNS{
-				Port:                   Port(consts.DefaultRedirectDNSPort),
 				Enabled:                false,
+				Port:                   Port(consts.DefaultRedirectDNSPort),
 				CaptureAll:             false,
 				SkipConntrackZoneSplit: false,
 				ResolvConfigPath:       "/etc/resolv.conf",
@@ -849,16 +951,14 @@ func DefaultConfig() Config {
 			},
 		},
 		Ebpf: Ebpf{
-			Enabled:            false,
-			CgroupPath:         "/sys/fs/cgroup",
-			BPFFSPath:          "/run/kuma/bpf",
-			ProgramsSourcePath: "/tmp/kuma-ebpf",
+			Enabled:              false,
+			InstanceIP:           "",
+			InstanceIPEnvVarName: "",
+			BPFFSPath:            "/run/kuma/bpf",
+			CgroupPath:           "/sys/fs/cgroup",
+			ProgramsSourcePath:   "/tmp/kuma-ebpf",
+			TCAttachIface:        "",
 		},
-		DropInvalidPackets: false,
-		RuntimeStdout:      os.Stdout,
-		RuntimeStderr:      os.Stderr,
-		Verbose:            false,
-		DryRun:             false,
 		Log: Log{
 			Enabled: false,
 			Level:   consts.LogLevelDebug,
@@ -871,12 +971,16 @@ func DefaultConfig() Config {
 			MaxRetries:          4,
 			SleepBetweenRetries: config_types.Duration{Duration: 2 * time.Second},
 		},
-		Executables: NewExecutables(),
 		Comments: Comments{
 			Disabled: false,
 		},
-		IPFamilyMode:   IPFamilyModeDualStack,
-		StoreFirewalld: false,
-		CNIMode:        false,
+		Executables:        NewExecutables(),
+		RuntimeStdout:      os.Stdout,
+		RuntimeStderr:      os.Stderr,
+		DropInvalidPackets: false,
+		StoreFirewalld:     false,
+		CNIMode:            false,
+		Verbose:            false,
+		DryRun:             false,
 	}
 }
