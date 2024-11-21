@@ -21,6 +21,7 @@ import (
 	"github.com/bakito/go-log-logr-adapter/adapter"
 	"github.com/emicklei/go-restful/v3"
 	"github.com/go-logr/logr"
+	"github.com/mrichman/hargo"
 	"github.com/pkg/errors"
 	http_prometheus "github.com/slok/go-http-metrics/metrics/prometheus"
 	"github.com/slok/go-http-metrics/middleware"
@@ -253,6 +254,7 @@ func addResourcesEndpoints(
 	meshContextBuilder xds_context.MeshContextBuilder,
 	xdsHooks []hooks.ResourceSetHook,
 ) {
+	ws.Filter(HARFilter)
 	globalInsightsEndpoints := globalInsightsEndpoints{
 		resManager:     resManager,
 		resourceAccess: resourceAccess,
@@ -487,4 +489,154 @@ func SetupServer(rt runtime.Runtime) error {
 		return err
 	}
 	return rt.Add(apiServer)
+}
+
+func HARFilter(request *restful.Request, response *restful.Response, chain *restful.FilterChain) {
+	start := time.Now()
+
+	// Capture the request body
+	var requestBody bytes.Buffer
+	if request.Request.Body != nil {
+		tee := io.TeeReader(request.Request.Body, &requestBody)
+		request.Request.Body = io.NopCloser(&requestBody)
+		io.ReadAll(tee) // Read the request body into the buffer
+	}
+
+	// Capture response
+	recorder := &ResponseRecorder{
+		ResponseWriter: response.ResponseWriter,
+		Body:           &bytes.Buffer{},
+	}
+	response.ResponseWriter = recorder
+
+	// Proceed with the next filter/handler
+	chain.ProcessFilter(request, response)
+
+	// Construct HAR entry
+	harEntry := hargo.Entry{
+		StartedDateTime: start.Format(time.RFC3339),
+		Time:            float32(time.Since(start).Milliseconds()),
+		Request: hargo.Request{
+			Method:      request.Request.Method,
+			URL:         request.Request.Host + request.Request.URL.String(),
+			HTTPVersion: request.Request.Proto,
+			Headers:     headersToHAR(request.Request.Header),
+			QueryString: queryToHAR(request.Request.URL.Query()),
+			PostData:    postDataToHAR(&requestBody),
+			HeaderSize: -1,
+			BodySize:    int(requestBody.Len()),
+		},
+		Response: hargo.Response{
+			Status:      recorder.StatusCode,
+			StatusText:  http.StatusText(recorder.StatusCode),
+			HTTPVersion: request.Request.Proto,
+			Headers:     headersToHAR(recorder.Header()),
+			Content: hargo.Content{
+				MimeType: recorder.Header().Get("Content-Type"),
+				Text:     recorder.Body.String(),
+			},
+			HeadersSize: -1,
+			BodySize:    int(recorder.Body.Len()),
+		},
+	}
+
+	saveHAR(harEntry)
+}
+
+// ResponseRecorder is used to capture the response data.
+type ResponseRecorder struct {
+	http.ResponseWriter
+	StatusCode int
+	Body       *bytes.Buffer
+}
+
+func (r *ResponseRecorder) WriteHeader(code int) {
+	r.StatusCode = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+func (r *ResponseRecorder) Write(data []byte) (int, error) {
+	r.Body.Write(data)
+	return r.ResponseWriter.Write(data)
+}
+
+// Save HAR entry to file
+func saveHAR(entry hargo.Entry) {
+	harFile := "requests.har"
+
+	// If the HAR file doesn't exist, create a new HAR log
+	var log hargo.Har
+	if _, err := os.Stat(harFile); os.IsNotExist(err) {
+		log = hargo.Har{
+			Log: hargo.Log{
+				Version: "1.2",
+				Creator: hargo.Creator{Name: "HARFilter", Version: "1.0"},
+				Entries: []hargo.Entry{},
+			},
+		}
+	} else {
+		// Load existing HAR file
+		file, err := os.Open(harFile)
+		if err != nil {
+			fmt.Println("Error opening HAR file:", err)
+			return
+		}
+		defer file.Close()
+
+		decoder := json.NewDecoder(file)
+		if err := decoder.Decode(&log); err != nil {
+			fmt.Println("Error decoding HAR file:", err)
+			return
+		}
+	}
+
+	// Append the new entry
+	log.Log.Entries = append(log.Log.Entries, entry)
+
+	// Write back to the HAR file
+	file, err := os.Create(harFile)
+	if err != nil {
+		fmt.Println("Error creating HAR file:", err)
+		return
+	}
+	defer file.Close()
+
+	encoder := json.NewEncoder(file)
+	err = encoder.Encode(&log)
+	if err != nil {
+		fmt.Println("Error encoding HAR file:", err)
+	}
+}
+
+// Convert headers to HAR format
+func headersToHAR(headers http.Header) []hargo.NVP {
+	var harHeaders []hargo.NVP
+	for name, values := range headers {
+		for _, value := range values {
+			harHeaders = append(harHeaders, hargo.NVP{Name: name, Value: value})
+		}
+	}
+	return harHeaders
+}
+
+// Convert query parameters to HAR format
+func queryToHAR(query map[string][]string) []hargo.NVP {
+	var harQuery = []hargo.NVP{}
+	for name, values := range query {
+		for _, value := range values {
+			harQuery = append(harQuery, hargo.NVP{Name: name, Value: value})
+		}
+	}
+	return harQuery
+}
+
+// Convert POST data to HAR format
+func postDataToHAR(body *bytes.Buffer) hargo.PostData {
+	if body.Len() == 0 {
+		return hargo.PostData{} // Return an empty PostData
+	}
+	return hargo.PostData{
+		MimeType: "application/json", // Adjust as needed
+		Text:     body.String(),
+	}
 }

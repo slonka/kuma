@@ -91,7 +91,10 @@ require (
 	sigs.k8s.io/yaml v1.4.0
 )
 
-require golang.org/x/sync v0.9.0
+require (
+	github.com/mrichman/hargo v1.0.1
+	golang.org/x/sync v0.9.0
+)
 
 require (
 	cel.dev/expr v0.16.1 // indirect
@@ -152,6 +155,7 @@ require (
 	github.com/huandu/xstrings v1.5.0 // indirect
 	github.com/imdario/mergo v0.3.16 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+	github.com/influxdata/influxdb1-client v0.0.0-20190809212627-fc22c7df067e // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect

@@ -159,6 +159,7 @@ func (c *UniversalCluster) DeployKuma(mode core.CpMode, opt ...KumaDeploymentOpt
 			return err
 		}
 		dockerVolumes = append(dockerVolumes, path+":/kuma/kuma-cp.conf")
+		dockerVolumes = append(dockerVolumes, "/tmp/hars/:/home/nonroot/requests.har")
 	}
 
 	verboseOutToStd := true
