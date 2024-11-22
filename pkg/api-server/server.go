@@ -499,10 +499,16 @@ func HARFilter(request *restful.Request, response *restful.Response, chain *rest
 
 	// Capture the request body
 	var requestBody bytes.Buffer
+	var bodyContents []byte
 	if request.Request.Body != nil {
+		log.Info("reading post data")
 		tee := io.TeeReader(request.Request.Body, &requestBody)
 		request.Request.Body = io.NopCloser(&requestBody)
-		io.ReadAll(tee) // Read the request body into the buffer
+		var err error
+		bodyContents, err = io.ReadAll(tee) // Read the request body into the buffer
+		if err != nil {
+			log.Error(err, "error reading buffer")
+		}
 	}
 
 	// Capture response
@@ -525,7 +531,7 @@ func HARFilter(request *restful.Request, response *restful.Response, chain *rest
 			HTTPVersion: request.Request.Proto,
 			Headers:     headersToHAR(request.Request.Header),
 			QueryString: queryToHAR(request.Request.URL.Query()),
-			PostData:    postDataToHAR(&requestBody, request.Request.Header.Get("Content-Type")),
+			PostData:    postDataToHAR(bodyContents, request.Request.Header.Get("Content-Type")),
 			HeaderSize: -1,
 			BodySize:    int(requestBody.Len()),
 		},
@@ -634,28 +640,32 @@ func queryToHAR(query map[string][]string) []hargo.NVP {
 }
 
 // Convert POST data to HAR format
-func postDataToHAR(body *bytes.Buffer, contentType string) hargo.PostData {
+func postDataToHAR(body []byte, contentType string) hargo.PostData {
 	var postData hargo.PostData
 
-	if body.Len() == 0 {
+	if len(body) == 0 {
+		log.Info("Post data empty")
 		return postData // Return empty PostData if body is empty
 	}
+	log.Info("Post data received")
 
 	// Try to unmarshal the body as JSON first
 	var jsonData interface{}
-	err := json.Unmarshal(body.Bytes(), &jsonData)
+	err := json.Unmarshal(body, &jsonData)
 	if err == nil {
 		// If unmarshalling succeeds, store it as JSON
 		postData = hargo.PostData{
 			MimeType: "application/json",
-			Text:     body.String(),
+			Text:     string(body),
 		}
 		return postData
+	} else {
+		log.Error(err, "error unmarshaling json", "value", string(body))
 	}
 
 	// If JSON unmarshalling fails, check if it's application/x-www-form-urlencoded
 	if strings.Contains(contentType, "application/x-www-form-urlencoded") {
-		values, err := url.ParseQuery(body.String())
+		values, err := url.ParseQuery(string(body))
 		if err == nil {
 			for key, vals := range values {
 				for _, val := range vals {
@@ -670,7 +680,7 @@ func postDataToHAR(body *bytes.Buffer, contentType string) hargo.PostData {
 	// Fallback to raw text for other content types
 	postData = hargo.PostData{
 		MimeType: contentType,
-		Text:     body.String(),
+		Text:     string(body),
 	}
 
 	return postData
