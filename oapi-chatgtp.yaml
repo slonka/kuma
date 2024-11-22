@@ -308,7 +308,6 @@ paths:
             application/json:
               schema:
                 type: object
-
                 properties:
                   constraints:
                     description: "Constraints that applies to the mesh and its entities"
@@ -445,6 +444,41 @@ paths:
         required: true
         content:
           application/json:
+            examples:
+              builtInCa:
+                summary: "Mesh with built-in CA"
+                value:
+                  type: Mesh
+                  name: default
+                  mtls:
+                    enabledBackend: ca-1
+                    backends:
+                      - name: ca-1
+                        type: builtin
+                        dpCert:
+                          rotation:
+                            expiration: 1d
+                        conf:
+                          caCert:
+                            RSAbits: 2048
+                            expiration: 10y
+              providedCa:
+                summary: "Mesh with a provided CA"
+                value:
+                  type: "Mesh"
+                  name: "secondary"
+                  creationTime: "0001-01-01T00:00:00Z"
+                  modificationTime: "0001-01-01T00:00:00Z"
+                  mtls:
+                    enabledBackend: "ca-1"
+                    backends:
+                      - name: "ca-1"
+                        type: "provided"
+                        conf:
+                          cert:
+                            inline: "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUM3VENDQWRXZ0F3SUJBZ0lVTnVHbDVRMVhEZEphQ211MUZkd0pQMHhoNHkwd0RRWUpLb1pJaHZjTkFRRUwKQlFBd0VERU9NQXdHQTFVRUF3d0ZTR1ZzYkc4d0hoY05NalF4TVRJeE1USTBOVEkzV2hjTk1qUXhNakl4TVRJMApOVEkzV2pBUU1RNHdEQVlEVlFRRERBVklaV3hzYnpDQ0FTSXdEUVlKS29aSWh2Y05BUUVCQlFBRGdnRVBBRENDCkFRb0NnZ0VCQU1pQ0RETjkvNGVSQ3IxYW1KTDdxQS9zdXdwSHFCelhBV2o1dXR6QXZDOTM5aGdCMDdPU0xWSysKQ2pQYXNlbUFQcEFRbWpiNkNiZm1EK0xyMTE0WHNKVVV1ZGlHQ2swcFRVR3duejRvZmZkVWdwYndYSlcwdjNReQpTdWFDckxoMllUeXRFSFpxSW1sUUg4M2Z4bTBSY3pOZkVhOXlDQnMyNzFvbE1RbmxxRFNjWlNtOGVTVEhnK3NaCjRpdEV1d0diYWRvK0hKS2hBOG9yRWJhSnREcjIyanJYOW0xVTYwREtsdkFVMjhMb3VxSmY0TmJwalQyZ3NnN0MKUk5HdTNTejk3UHo2NjFlREVINll6T3BMUFdNaVN4VzhNc2Ewcm5IWFJFb25seEkwd0hJK0NBeElWajlqSEhlNAoyQTZxcEc2QjJMYWhJeTVKdC9ZUlBLOERCRlNqU284Q0F3RUFBYU0vTUQwd0R3WURWUjBUQkFnd0JnRUIvd0lCCkFEQUxCZ05WSFE4RUJBTUNBZ1F3SFFZRFZSME9CQllFRkZ0N1ZoZVhXR1A0RVdTRWEyZjJ2b3NuQmxLY01BMEcKQ1NxR1NJYjNEUUVCQ3dVQUE0SUJBUUFGUVhENCs3NnZ1akJHY3JYUGdma3MzUFlYaS8zWHZ2NkpEVGJJUDRGQQpRaTVMQTdYaDh2Yk5iSDhJSVVKMkZISGtTcGIxWjFUNWtxTkl0TXJ2YlRDaWQ4WXQvb1NBeFI1TjZTOXlmdW1DCnpXdzMxcHdkWjE1REhtUlhpR2JLT3N1QmpZbXptOXNyR3VnbzZVVzVoWW43WVowNmNXUnlxZXQ4dDhnRkV1QkEKQXkxRGwrOHo2Z205bWFISTBJV3NuL3pTVHNtVTRQdmI2MEt1YWUxOVZIM25DRHd1UEp0SkhmViszYlNtYzBEdwpoWUNOVWpweW5YT0c3S1JHM2lHQkhXRURHYzdqZjI5dEF4WEZiZHFYY2VZY1VNT0lmQklWMzFDRUZFMlVuUUpuCkM2Nk82VjBsdHZaYkZqRTgxVkduVExIbjljMk8zcWtLNjFZazJON3BrNmp1Ci0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K"
+                          key:
+                            inline: "LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JSUV2UUlCQURBTkJna3Foa2lHOXcwQkFRRUZBQVNDQktjd2dnU2pBZ0VBQW9JQkFRRElnZ3d6ZmYrSGtRcTkKV3BpUys2Z1A3THNLUjZnYzF3Rm8rYnJjd0x3dmQvWVlBZE96a2kxU3Znb3oyckhwZ0Q2UUVKbzIrZ20zNWcvaQo2OWRlRjdDVkZMblloZ3BOS1UxQnNKOCtLSDMzVklLVzhGeVZ0TDkwTWtybWdxeTRkbUU4clJCMmFpSnBVQi9OCjM4WnRFWE16WHhHdmNnZ2JOdTlhSlRFSjVhZzBuR1Vwdkhra3g0UHJHZUlyUkxzQm0ybmFQaHlTb1FQS0t4RzIKaWJRNjl0bzYxL1p0Vk90QXlwYndGTnZDNkxxaVgrRFc2WTA5b0xJT3drVFJydDBzL2V6OCt1dFhneEIrbU16cQpTejFqSWtzVnZETEd0SzV4MTBSS0o1Y1NOTUJ5UGdnTVNGWS9ZeHgzdU5nT3FxUnVnZGkyb1NNdVNiZjJFVHl2CkF3UlVvMHFQQWdNQkFBRUNnZ0VBQzNxbWlDd21mUFJvMFA1bXpjTnFrNzdSMW56VHV4TDBHYlp5WkVFRWhSTXgKRzU2L0tBQ3VaNVpKcno1T0FUZytYTEVXb3g4ZGYxSEVoeEZKZXpHUUFuajFTdGdocnRrMmV4UkppWjEzMkxrVgo0TjVSN3FBeWRjeUxUVGNkL0ZHS3I1YVk0cTZnMmJha20zeThOM0pRVGhpYlFwZ2Nyckl1Y2RLL1Evbko3M2tLCnZNbXcvYVRmS0xLcldKYy9oYU0rNVNHMS9acEViWWlaMGF2KzdyVGJtZWg1MEFYd1YyOVR1ekV4b3VUT0p3SXkKR3JtQmZ0TWtod2dPYTZuaDJheWlMNzRsRi9rWGRVSWxwQm4xYmRNS2prT0F4MlRCbjZ5MWRXN3FWN3BXYjMyMwo3OUdtbTVreG9IUUtPWXJTVkt4SEJ4M0syR1RGbUZabWN6L1EvUnBMQVFLQmdRRHFVTmdnL3U3K2h0cWQ1MHk3Cm5KWmpiS3QrbTdDNStTSjRHWmY3RnUvTU54UmQxdUMzcVZndXRNTUhXTjZOUmM4aGI5WjM3cXdKdzh3cVFEczUKa01Od0Y5bTd1TlJPa2NsTTF4M1NXN0M0QndtY1BtaFVqaVZzbXlQdjNJeDdhNjRXd0owbldFMjRQU3F4MW9taApWY01xWDh0ZmZnc041Q2F4enp0Nm1nbURFUUtCZ1FEYkVFUUVyZWdGMUpEZCtIY3IwZi9Ob25wakQzdmlxbnRGClpmYVlOTENuZXdaN0ZBTzdyM3lQNkFQOW5vd0VLY2RCaGZEei9VOEoyYWpFbmZ4RTc5aUV5TGtsWUpTWWpibDQKQWJ6ZXd5NW84RU5OTVNHMHZpVTE5OXZTYkhmUW91K0JCU1dQS0prZytrNGFZQzFOWFoydGo5SFBSbUNrencwRApaSW1SbExhem53S0JnUUNzeU5iSFpoWkluSnJEUzlmYWxQcVU4SUo1eDBjSHJINU5mOW9CcndVL1d2SnF6RlJECk90NHErdUxDSFRkbmg2M1k0MGFNZy9SYTh3WXZ0ZE8yZkZpUjVSU0xDQjJPbnBTSlZDdktmaENQYzZrVGpUV1QKL0luK1QxeXR1TDNqR1NGejU2ODdYek5ZZzhwaS8yZllENHp1UjF1SjNFRThpaHc2akMwNUdET2hjUUtCZ0JKQQovN240Rjg1c2tRbStDNGdlUHBlUEEyMi91NDMrc0xqdXJ5YXR0VTZ2WkxIYTBCalNuYW1NSnRENlppWnVxTWpmCjlWMFBiWWVmbUgyUndKU3ArN3ZNMGdpNFRJbU52YmV2UldLMmx1WnRwdDRHeXcwNWp2WTVTaHIxcU9JOHdZSloKd0hCMmJKUWY1MlF4UVhVaDZPS3Vpa2dnVUN0TGlZVVAycHJEN3BsM0FvR0FUQlhLU1plSTRnTm1zUFhBd3J4YwpiT0dvQUp5NjV4WGx1SW9rL3poTGt5OU1mQTJ1SXlMaDhrQjBmWmI4VUNpaXdSK2syT3pvcFhITHd3WGRtUUZTCkJHMjNBVE5JUWdaeEcrREFrWStadlpiRU9aTDhxbHlqN1dUSGV1b3hpQzBubWx3VXlHbDBNL0dtSHA5c0RES1AKMzBZM3BwNmV2a3JPa1Z4TW1UdVNta1E9Ci0tLS0tRU5EIFBSSVZBVEUgS0VZLS0tLS0K"
             schema:
               type: object
               description: "Mesh defines configuration of a single mesh."
