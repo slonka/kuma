@@ -1,0 +1,570 @@
+openapi: "3.0.0"
+info:
+  version: "1.0"
+  title: "Avantation REST Template"
+  description: "Kuma Mesh API with parameterized mesh names"
+servers:
+  - url: "{scheme}://localhost:5681/{basePath}"
+    variables:
+      scheme:
+        enum:
+          - "https"
+          - "http"
+        default: "http"
+      basePath:
+        default: ""
+tags:
+  - name: "meshes"
+components:
+  parameters:
+    MeshName:
+      name: meshName
+      in: path
+      required: true
+      description: "Name of the mesh (e.g., default, secondary)"
+      schema:
+        type: string
+  schemas:
+    CertificateAuthorityBackend:
+      description: "CertificateAuthorityBackend defines Certificate Authority backend"
+      properties:
+        conf:
+          description: "Configuration of the backend"
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+        dpCert:
+          description: "Dataplane certificate settings"
+          properties:
+            requestTimeout:
+              description: "Timeout on request to CA for DP certificate generation and retrieval"
+              type: string
+            rotation:
+              description: "Rotation settings"
+              properties:
+                expiration:
+                  description: "Time after which generated certificate for Dataplane will expire"
+                  type: string
+              type: object
+          type: object
+        mode:
+          description: "Mode defines the behaviour of inbound listeners with regard to traffic encryption"
+          enum:
+            - "STRICT"
+            - "PERMISSIVE"
+          type: string
+        name:
+          description: "Name of the backend"
+          type: string
+        rootChain:
+          properties:
+            requestTimeout:
+              description: "Timeout on request for to CA for root certificate chain. If not specified, defaults to 10s."
+              type: string
+          type: object
+        type:
+          description: "Type of the backend. Has to be one of the loaded plugins (Kuma ships with builtin and provided)"
+          type: string
+      type: object
+    DatadogTracingBackendConfig:
+      properties:
+        address:
+          description: "Address of datadog collector."
+          type: string
+        port:
+          description: "Port of datadog collector"
+          maximum: 4294967295
+          minimum: 0
+          type: integer
+        splitService:
+          description: "Determines if datadog service name should be split based on traffic direction and destination. Default: false"
+          type: boolean
+      type: object
+    FileLoggingBackendConfig:
+      description: "FileLoggingBackendConfig defines configuration for file based access logs"
+      properties:
+        path:
+          description: "Path to a file that logs will be written to"
+          type: string
+      type: object
+    Logging:
+      properties:
+        backends:
+          description: "List of available logging backends"
+          items:
+            description: "LoggingBackend defines logging backend available to mesh. Backends can be used in TrafficLog rules."
+            properties:
+              conf:
+                description: "Configuration of the backend"
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              format:
+                description: "Format of access logs. Placeholders available on https://www.envoyproxy.io/docs/envoy/latest/configuration/observability/access_log"
+                type: string
+              name:
+                description: "Name of the backend, can be then used in Mesh.logging.defaultBackend or in TrafficLogging"
+                type: string
+              type:
+                description: "Type of the backend (Kuma ships with 'tcp' and 'file')"
+                type: string
+            type: object
+          type: array
+        defaultBackend:
+          description: "Name of the default backend"
+          type: string
+      type: object
+    Mesh:
+      description: "Mesh defines configuration of a single mesh."
+      properties:
+        constraints:
+          description: "Constraints that applies to the mesh and its entities"
+          properties:
+            dataplaneProxy:
+              description: "DataplaneProxyMembership defines a set of requirements for data plane proxies to be a member of the mesh."
+              properties:
+                requirements:
+                  description: "Requirements defines a set of requirements that data plane proxies must fulfill in order to join the mesh."
+                  items:
+                    description: "Rules defines a set of rules for data plane proxies to be member of the mesh."
+                    properties:
+                      tags:
+                        additionalProperties:
+                          type: string
+                        description: "Tags defines set of required tags. You can specify '*' in value to require non empty value of tag"
+                        type: object
+                    type: object
+                  type: array
+                restrictions:
+                  description: "Restrictions defines a set of restrictions that data plane proxies cannot fulfill in order to join the mesh."
+                  items:
+                    description: "Rules defines a set of rules for data plane proxies to be member of the mesh."
+                    properties:
+                      tags:
+                        additionalProperties:
+                          type: string
+                        description: "Tags defines set of required tags. You can specify '*' in value to require non empty value of tag"
+                        type: object
+                    type: object
+                  type: array
+              type: object
+          type: object
+        logging:
+          description: "Logging settings. +optional"
+          properties:
+            backends:
+              description: "List of available logging backends"
+              items:
+                description: "LoggingBackend defines logging backend available to mesh. Backends can be used in TrafficLog rules."
+                properties:
+                  conf:
+                    description: "Configuration of the backend"
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+                  format:
+                    description: "Format of access logs. Placeholders available on https://www.envoyproxy.io/docs/envoy/latest/configuration/observability/access_log"
+                    type: string
+                  name:
+                    description: "Name of the backend, can be then used in Mesh.logging.defaultBackend or in TrafficLogging"
+                    type: string
+                  type:
+                    description: "Type of the backend (Kuma ships with 'tcp' and 'file')"
+                    type: string
+                type: object
+              type: array
+            defaultBackend:
+              description: "Name of the default backend"
+              type: string
+          type: object
+        mtls:
+          description: "mTLS settings. +optional"
+          properties:
+            backends:
+              description: "List of available Certificate Authority backends"
+              items:
+                description: "CertificateAuthorityBackend defines Certificate Authority backend"
+                properties:
+                  conf:
+                    description: "Configuration of the backend"
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+                  dpCert:
+                    description: "Dataplane certificate settings"
+                    properties:
+                      requestTimeout:
+                        description: "Timeout on request to CA for DP certificate generation and retrieval"
+                        type: string
+                      rotation:
+                        description: "Rotation settings"
+                        properties:
+                          expiration:
+                            description: "Time after which generated certificate for Dataplane will expire"
+                            type: string
+                        type: object
+                    type: object
+                  mode:
+                    description: "Mode defines the behaviour of inbound listeners with regard to traffic encryption"
+                    enum:
+                      - "STRICT"
+                      - "PERMISSIVE"
+                    type: string
+                  name:
+                    description: "Name of the backend"
+                    type: string
+                  rootChain:
+                    properties:
+                      requestTimeout:
+                        description: "Timeout on request for to CA for root certificate chain. If not specified, defaults to 10s."
+                        type: string
+                    type: object
+                  type:
+                    description: "Type of the backend. Has to be one of the loaded plugins (Kuma ships with builtin and provided)"
+                    type: string
+                type: object
+              type: array
+            enabledBackend:
+              description: "Name of the enabled backend"
+              type: string
+            skipValidation:
+              description: "If enabled, skips CA validation."
+              type: boolean
+          type: object
+      type: object
+    Networking:
+      description: "Networking defines the networking configuration of the mesh"
+      properties:
+        outbound:
+          description: "Outbound settings"
+          properties:
+            passthrough:
+              description: "Control the passthrough cluster"
+              nullable: true
+              type: boolean
+          type: object
+      type: object
+    Routing:
+      description: "Routing defines configuration for the routing in the mesh"
+      properties:
+        defaultForbidMeshExternalServiceAccess:
+          description: "If true, blocks traffic to MeshExternalServices. Default: false"
+          type: boolean
+        localityAwareLoadBalancing:
+          description: "Enable the Locality Aware Load Balancing"
+          type: boolean
+        zoneEgress:
+          description: "Enable routing traffic to services in other zone or external services through ZoneEgress. Default: false"
+          type: boolean
+      type: object
+    TcpLoggingBackendConfig:
+      description: "TcpLoggingBackendConfig defines configuration for TCP based access logs"
+      properties:
+        address:
+          description: "Address to TCP service that will receive logs"
+          type: string
+      type: object
+    Tracing:
+      description: "Tracing defines tracing configuration of the mesh."
+      properties:
+        backends:
+          description: "List of available tracing backends"
+          items:
+            description: "TracingBackend defines tracing backend available to mesh. Backends can be used in TrafficTrace rules."
+            properties:
+              conf:
+                description: "Configuration of the backend"
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              name:
+                description: "Name of the backend, can be then used in Mesh.tracing.defaultBackend or in TrafficTrace"
+                type: string
+              sampling:
+                description: "Percentage of traces that will be sent to the backend (range 0.0 - 100.0). Empty value defaults to 100.0%"
+                nullable: true
+                type: number
+              type:
+                description: "Type of the backend (Kuma ships with 'zipkin')"
+                type: string
+            type: object
+          type: array
+        defaultBackend:
+          description: "Name of the default backend"
+          type: string
+      type: object
+paths:
+  /meshes/{meshName}:
+    get:
+      tags:
+        - "meshes"
+      summary: "Get details of a specific mesh"
+      parameters:
+        - name: meshName
+          in: path
+          required: true
+          description: "Name of the mesh (e.g., default, secondary)"
+          schema:
+            type: string
+      responses:
+        '200':
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                type: object
+
+                properties:
+                  constraints:
+                    description: "Constraints that applies to the mesh and its entities"
+                    properties:
+                      dataplaneProxy:
+                        description: "DataplaneProxyMembership defines a set of requirements for data plane proxies to be a member of the mesh."
+                        properties:
+                          requirements:
+                            description: "Requirements defines a set of requirements that data plane proxies must fulfill in order to join the mesh."
+                            items:
+                              description: "Rules defines a set of rules for data plane proxies to be member of the mesh."
+                              properties:
+                                tags:
+                                  additionalProperties:
+                                    type: string
+                                  description: "Tags defines set of required tags. You can specify '*' in value to require non empty value of tag"
+                                  type: object
+                              type: object
+                            type: array
+                          restrictions:
+                            description: "Restrictions defines a set of restrictions that data plane proxies cannot fulfill in order to join the mesh."
+                            items:
+                              description: "Rules defines a set of rules for data plane proxies to be member of the mesh."
+                              properties:
+                                tags:
+                                  additionalProperties:
+                                    type: string
+                                  description: "Tags defines set of required tags. You can specify '*' in value to require non empty value of tag"
+                                  type: object
+                              type: object
+                            type: array
+                        type: object
+                    type: object
+                  logging:
+                    description: "Logging settings. +optional"
+                    properties:
+                      backends:
+                        description: "List of available logging backends"
+                        items:
+                          description: "LoggingBackend defines logging backend available to mesh. Backends can be used in TrafficLog rules."
+                          properties:
+                            conf:
+                              description: "Configuration of the backend"
+                              type: object
+                              x-kubernetes-preserve-unknown-fields: true
+                            format:
+                              description: "Format of access logs. Placeholders available on https://www.envoyproxy.io/docs/envoy/latest/configuration/observability/access_log"
+                              type: string
+                            name:
+                              description: "Name of the backend, can be then used in Mesh.logging.defaultBackend or in TrafficLogging"
+                              type: string
+                            type:
+                              description: "Type of the backend (Kuma ships with 'tcp' and 'file')"
+                              type: string
+                          type: object
+                        type: array
+                      defaultBackend:
+                        description: "Name of the default backend"
+                        type: string
+                    type: object
+                  mtls:
+                    description: "mTLS settings. +optional"
+                    properties:
+                      backends:
+                        description: "List of available Certificate Authority backends"
+                        items:
+                          description: "CertificateAuthorityBackend defines Certificate Authority backend"
+                          properties:
+                            conf:
+                              description: "Configuration of the backend"
+                              type: object
+                              x-kubernetes-preserve-unknown-fields: true
+                            dpCert:
+                              description: "Dataplane certificate settings"
+                              properties:
+                                requestTimeout:
+                                  description: "Timeout on request to CA for DP certificate generation and retrieval"
+                                  type: string
+                                rotation:
+                                  description: "Rotation settings"
+                                  properties:
+                                    expiration:
+                                      description: "Time after which generated certificate for Dataplane will expire"
+                                      type: string
+                                  type: object
+                              type: object
+                            mode:
+                              description: "Mode defines the behaviour of inbound listeners with regard to traffic encryption"
+                              enum:
+                                - "STRICT"
+                                - "PERMISSIVE"
+                              type: string
+                            name:
+                              description: "Name of the backend"
+                              type: string
+                            rootChain:
+                              properties:
+                                requestTimeout:
+                                  description: "Timeout on request for to CA for root certificate chain. If not specified, defaults to 10s."
+                                  type: string
+                              type: object
+                            type:
+                              description: "Type of the backend. Has to be one of the loaded plugins (Kuma ships with builtin and provided)"
+                              type: string
+                          type: object
+                        type: array
+                      enabledBackend:
+                        description: "Name of the enabled backend"
+                        type: string
+                      skipValidation:
+                        description: "If enabled, skips CA validation."
+                        type: boolean
+                    type: object
+        '500':
+          description: "Internal Server Error"
+          content:
+            application/json:
+              examples:
+                error-1:
+                  value:
+                    message: "Sorry unable to perform operation."
+    put:
+      tags:
+        - "meshes"
+      summary: "Update a specific mesh"
+      parameters:
+        - name: meshName
+          in: path
+          required: true
+          description: "Name of the mesh (e.g., default, secondary)"
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: "Mesh defines configuration of a single mesh."
+              properties:
+                constraints:
+                  description: "Constraints that applies to the mesh and its entities"
+                  properties:
+                    dataplaneProxy:
+                      description: "DataplaneProxyMembership defines a set of requirements for data plane proxies to be a member of the mesh."
+                      properties:
+                        requirements:
+                          description: "Requirements defines a set of requirements that data plane proxies must fulfill in order to join the mesh."
+                          items:
+                            description: "Rules defines a set of rules for data plane proxies to be member of the mesh."
+                            properties:
+                              tags:
+                                additionalProperties:
+                                  type: string
+                                description: "Tags defines set of required tags. You can specify '*' in value to require non empty value of tag"
+                                type: object
+                            type: object
+                          type: array
+                        restrictions:
+                          description: "Restrictions defines a set of restrictions that data plane proxies cannot fulfill in order to join the mesh."
+                          items:
+                            description: "Rules defines a set of rules for data plane proxies to be member of the mesh."
+                            properties:
+                              tags:
+                                additionalProperties:
+                                  type: string
+                                description: "Tags defines set of required tags. You can specify '*' in value to require non empty value of tag"
+                                type: object
+                            type: object
+                          type: array
+                      type: object
+                  type: object
+                logging:
+                  description: "Logging settings. +optional"
+                  properties:
+                    backends:
+                      description: "List of available logging backends"
+                      items:
+                        description: "LoggingBackend defines logging backend available to mesh. Backends can be used in TrafficLog rules."
+                        properties:
+                          conf:
+                            description: "Configuration of the backend"
+                            type: object
+                            x-kubernetes-preserve-unknown-fields: true
+                          format:
+                            description: "Format of access logs. Placeholders available on https://www.envoyproxy.io/docs/envoy/latest/configuration/observability/access_log"
+                            type: string
+                          name:
+                            description: "Name of the backend, can be then used in Mesh.logging.defaultBackend or in TrafficLogging"
+                            type: string
+                          type:
+                            description: "Type of the backend (Kuma ships with 'tcp' and 'file')"
+                            type: string
+                        type: object
+                      type: array
+                    defaultBackend:
+                      description: "Name of the default backend"
+                      type: string
+                  type: object
+                mtls:
+                  description: "mTLS settings. +optional"
+                  properties:
+                    backends:
+                      description: "List of available Certificate Authority backends"
+                      items:
+                        description: "CertificateAuthorityBackend defines Certificate Authority backend"
+                        properties:
+                          conf:
+                            description: "Configuration of the backend"
+                            type: object
+                            x-kubernetes-preserve-unknown-fields: true
+                          dpCert:
+                            description: "Dataplane certificate settings"
+                            properties:
+                              requestTimeout:
+                                description: "Timeout on request to CA for DP certificate generation and retrieval"
+                                type: string
+                              rotation:
+                                description: "Rotation settings"
+                                properties:
+                                  expiration:
+                                    description: "Time after which generated certificate for Dataplane will expire"
+                                    type: string
+                                type: object
+                            type: object
+                          mode:
+                            description: "Mode defines the behaviour of inbound listeners with regard to traffic encryption"
+                            enum:
+                              - "STRICT"
+                              - "PERMISSIVE"
+                            type: string
+                          name:
+                            description: "Name of the backend"
+                            type: string
+                          rootChain:
+                            properties:
+                              requestTimeout:
+                                description: "Timeout on request for to CA for root certificate chain. If not specified, defaults to 10s."
+                                type: string
+                            type: object
+                          type:
+                            description: "Type of the backend. Has to be one of the loaded plugins (Kuma ships with builtin and provided)"
+                            type: string
+                        type: object
+                      type: array
+                    enabledBackend:
+                      description: "Name of the enabled backend"
+                      type: string
+                    skipValidation:
+                      description: "If enabled, skips CA validation."
+                      type: boolean
+                  type: object
+      responses:
+        '500':
+          description: "Internal Server Error"
+          content:
+            application/json:
+              example:
+                message: "Sorry unable to perform operation."
