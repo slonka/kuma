@@ -637,44 +637,40 @@ func queryToHAR(query map[string][]string) []hargo.NVP {
 func postDataToHAR(body *bytes.Buffer, contentType string) hargo.PostData {
 	var postData hargo.PostData
 
-	// If body is empty, return an empty PostData
 	if body.Len() == 0 {
+		return postData // Return empty PostData if body is empty
+	}
+
+	// Try to unmarshal the body as JSON first
+	var jsonData interface{}
+	err := json.Unmarshal(body.Bytes(), &jsonData)
+	if err == nil {
+		// If unmarshalling succeeds, store it as JSON
+		postData = hargo.PostData{
+			MimeType: "application/json",
+			Text:     body.String(),
+		}
 		return postData
 	}
 
-	// Handle based on Content-Type
-	if strings.Contains(contentType, "application/json") {
-		// For JSON bodies, treat as raw text
-		postData = hargo.PostData{
-			MimeType: contentType,
-			Text:     body.String(),
-		}
-	} else if strings.Contains(contentType, "application/x-www-form-urlencoded") {
-		// For form data, parse the query string and convert to PostParams
+	// If JSON unmarshalling fails, check if it's application/x-www-form-urlencoded
+	if strings.Contains(contentType, "application/x-www-form-urlencoded") {
 		values, err := url.ParseQuery(body.String())
 		if err == nil {
 			for key, vals := range values {
 				for _, val := range vals {
-					// Append the form parameters as PostParams
 					postData.Params = append(postData.Params, hargo.PostParam{Name: key, Value: val})
 				}
 			}
 		}
 		postData.MimeType = contentType
-	} else if strings.Contains(contentType, "multipart/form-data") {
-		// Handle multipart form-data (not fully implemented here, requires more complex parsing)
-		// This would need a library like `mime/multipart` to parse correctly if applicable
-		// Just returning raw text as a fallback for now
-		postData = hargo.PostData{
-			MimeType: contentType,
-			Text:     body.String(),
-		}
-	} else {
-		// For any other content type, assume raw text
-		postData = hargo.PostData{
-			MimeType: contentType,
-			Text:     body.String(),
-		}
+		return postData
+	}
+
+	// Fallback to raw text for other content types
+	postData = hargo.PostData{
+		MimeType: contentType,
+		Text:     body.String(),
 	}
 
 	return postData
