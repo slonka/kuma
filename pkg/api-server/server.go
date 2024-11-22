@@ -643,30 +643,46 @@ func queryToHAR(query map[string][]string) []hargo.NVP {
 func postDataToHAR(body []byte, contentType string) hargo.PostData {
 	var postData hargo.PostData
 
+	// If the body is empty, return empty postData
 	if len(body) == 0 {
-		log.Info("Post data empty")
+		log.Info("Post data is empty")
 		return postData // Return empty PostData if body is empty
 	}
+
 	log.Info("Post data received")
 
 	// Try to unmarshal the body as JSON first
 	var jsonData interface{}
 	err := json.Unmarshal(body, &jsonData)
 	if err == nil {
-		// If unmarshalling succeeds, store it as JSON
+		// If unmarshalling succeeds, store it as JSON and also extract parameters from it
 		postData = hargo.PostData{
 			MimeType: "application/json",
 			Text:     string(body),
 		}
+
+		// Extract parameters from the unmarshalled JSON (if it's an object)
+		if jsonMap, ok := jsonData.(map[string]interface{}); ok {
+			for key, value := range jsonMap {
+				// Check if value is a string or a type that can be represented as a string
+				if valStr, ok := value.(string); ok {
+					postData.Params = append(postData.Params, hargo.PostParam{Name: key, Value: valStr})
+				}
+				// You can also add handling for other types like numbers, booleans, arrays, etc.
+				// You could decide to handle them as well if needed.
+			}
+		}
+
 		return postData
 	} else {
-		log.Error(err, "error unmarshaling json", "value", string(body))
+		log.Error(err, "Error unmarshalling JSON", "value", string(body))
 	}
 
 	// If JSON unmarshalling fails, check if it's application/x-www-form-urlencoded
 	if strings.Contains(contentType, "application/x-www-form-urlencoded") {
 		values, err := url.ParseQuery(string(body))
 		if err == nil {
+			// Populate postParams with parsed query parameters
 			for key, vals := range values {
 				for _, val := range vals {
 					postData.Params = append(postData.Params, hargo.PostParam{Name: key, Value: val})
