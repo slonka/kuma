@@ -637,28 +637,40 @@ func queryToHAR(query map[string][]string) []hargo.NVP {
 func postDataToHAR(body *bytes.Buffer, contentType string) hargo.PostData {
 	var postData hargo.PostData
 
+	// If body is empty, return an empty PostData
 	if body.Len() == 0 {
-		return postData // Empty PostData
+		return postData
 	}
 
 	// Handle based on Content-Type
 	if strings.Contains(contentType, "application/json") {
+		// For JSON bodies, treat as raw text
 		postData = hargo.PostData{
 			MimeType: contentType,
 			Text:     body.String(),
 		}
 	} else if strings.Contains(contentType, "application/x-www-form-urlencoded") {
+		// For form data, parse the query string and convert to PostParams
 		values, err := url.ParseQuery(body.String())
 		if err == nil {
 			for key, vals := range values {
 				for _, val := range vals {
+					// Append the form parameters as PostParams
 					postData.Params = append(postData.Params, hargo.PostParam{Name: key, Value: val})
 				}
 			}
 		}
 		postData.MimeType = contentType
+	} else if strings.Contains(contentType, "multipart/form-data") {
+		// Handle multipart form-data (not fully implemented here, requires more complex parsing)
+		// This would need a library like `mime/multipart` to parse correctly if applicable
+		// Just returning raw text as a fallback for now
+		postData = hargo.PostData{
+			MimeType: contentType,
+			Text:     body.String(),
+		}
 	} else {
-		// Default to raw text for other content types
+		// For any other content type, assume raw text
 		postData = hargo.PostData{
 			MimeType: contentType,
 			Text:     body.String(),
