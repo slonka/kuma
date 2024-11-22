@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"github.com/google/uuid"
 	"io"
 	"net"
 	"net/http"
@@ -58,6 +59,8 @@ import (
 )
 
 var log = core.Log.WithName("api-server")
+
+var requestsUUID = uuid.NewString()
 
 type ApiServer struct {
 	mux        *http.ServeMux
@@ -518,11 +521,11 @@ func HARFilter(request *restful.Request, response *restful.Response, chain *rest
 		Time:            float32(time.Since(start).Milliseconds()),
 		Request: hargo.Request{
 			Method:      request.Request.Method,
-			URL:         request.Request.Host + request.Request.URL.String(),
+			URL:         "http://" + request.Request.Host + request.Request.URL.String(),
 			HTTPVersion: request.Request.Proto,
 			Headers:     headersToHAR(request.Request.Header),
 			QueryString: queryToHAR(request.Request.URL.Query()),
-			PostData:    postDataToHAR(&requestBody),
+			PostData:    postDataToHAR(&requestBody, request.Request.Header.Get("Content-Type")),
 			HeaderSize: -1,
 			BodySize:    int(requestBody.Len()),
 		},
@@ -562,7 +565,7 @@ func (r *ResponseRecorder) Write(data []byte) (int, error) {
 
 // Save HAR entry to file
 func saveHAR(entry hargo.Entry) {
-	harFile := "requests.har"
+	harFile := "requests-" + requestsUUID + ".har"
 
 	// If the HAR file doesn't exist, create a new HAR log
 	var log hargo.Har
@@ -631,12 +634,36 @@ func queryToHAR(query map[string][]string) []hargo.NVP {
 }
 
 // Convert POST data to HAR format
-func postDataToHAR(body *bytes.Buffer) hargo.PostData {
+func postDataToHAR(body *bytes.Buffer, contentType string) hargo.PostData {
+	var postData hargo.PostData
+
 	if body.Len() == 0 {
-		return hargo.PostData{} // Return an empty PostData
+		return postData // Empty PostData
 	}
-	return hargo.PostData{
-		MimeType: "application/json", // Adjust as needed
-		Text:     body.String(),
+
+	// Handle based on Content-Type
+	if strings.Contains(contentType, "application/json") {
+		postData = hargo.PostData{
+			MimeType: contentType,
+			Text:     body.String(),
+		}
+	} else if strings.Contains(contentType, "application/x-www-form-urlencoded") {
+		values, err := url.ParseQuery(body.String())
+		if err == nil {
+			for key, vals := range values {
+				for _, val := range vals {
+					postData.Params = append(postData.Params, hargo.PostParam{Name: key, Value: val})
+				}
+			}
+		}
+		postData.MimeType = contentType
+	} else {
+		// Default to raw text for other content types
+		postData = hargo.PostData{
+			MimeType: contentType,
+			Text:     body.String(),
+		}
 	}
+
+	return postData
 }
