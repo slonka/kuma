@@ -7,6 +7,10 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	config_postgres "github.com/kumahq/kuma/pkg/config/plugins/resources/postgres"
+	common_postgres "github.com/kumahq/kuma/pkg/plugins/common/postgres"
+	"github.com/kumahq/kuma/pkg/plugins/resources/postgres"
+	util_context "github.com/kumahq/kuma/pkg/util/context"
 	"io"
 	"net"
 	"net/http"
@@ -237,6 +241,32 @@ func NewApiServer(
 
 		chain.ProcessFilter(request, response)
 	})
+
+	if cfg.Store.Type == config_store.PostgresStore && cfg.Store.Postgres.DriverName == config_postgres.DriverNamePgx {
+		container.Filter(func(request *restful.Request, response *restful.Response, chain *restful.FilterChain) {
+			if request.Request.Context().Value(postgres.PgxConn{}) == nil {
+				p, err := common_postgres.ConnectToDbPgx(*cfg.Store.Postgres, rt.PgxConfigCustomizationFn())
+				if err != nil {
+					chain.ProcessFilter(request, response)
+					return
+				}
+				c, err := p.Acquire(request.Request.Context())
+				if err != nil {
+					chain.ProcessFilter(request, response)
+					return
+				}
+
+				log.Info("saving connection in the context")
+				cleanupContext := util_context.NewContextWithCleanup(request.Request.Context(), func() {
+					log.Info("releasing connection from pool")
+					c.Release()
+				})
+				request.Request = request.Request.WithContext(context.WithValue(cleanupContext, postgres.PgxConn{}, c))
+			}
+
+			chain.ProcessFilter(request, response)
+		})
+	}
 
 	rt.APIInstaller().Install(container)
 

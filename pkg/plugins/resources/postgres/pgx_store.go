@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/kumahq/kuma/pkg/core"
 	"maps"
 	"math/rand"
 	"strconv"
@@ -39,6 +40,8 @@ var (
 	_ store.Transactions  = &pgxResourceStore{}
 )
 
+var log = core.Log.WithName("postgres-pgx-store")
+
 type TransactionableResourceStore interface {
 	store.ResourceStore
 	store.Transactions
@@ -73,6 +76,34 @@ func NewPgxStore(metrics core_metrics.Metrics, config config.PostgresStoreConfig
 		maxListQueryElements: config.MaxListQueryElements,
 		roRatio:              config.ReadReplica.Ratio,
 	}, nil
+}
+
+type PgxConn struct{}
+
+func (r *pgxResourceStore) ExecWithCtx(ctx context.Context, pool *pgxpool.Pool, sql string, args ...any) (pgconn.CommandTag, error) {
+	conn, ok := ctx.Value(PgxConn{}).(*pgxpool.Conn)
+	log.V(1).Info("ExecWithCtx", "context", ctx, "ok", ok)
+
+	if ok {
+		log.V(1).Info("running with cached conn")
+		return conn.Exec(ctx, sql, args...)
+	} else {
+		log.V(1).Info("running normal conn")
+		return pool.Exec(ctx, sql, args...)
+	}
+}
+
+func (r *pgxResourceStore) RowWithCtx(ctx context.Context, pool *pgxpool.Pool, sql string, args ...any) pgx.Row {
+	conn, ok := ctx.Value(PgxConn{}).(*pgxpool.Conn)
+	log.V(1).Info("RowWithCtx", "context", ctx, "ok", ok)
+
+	if ok {
+		log.V(1).Info("running with cached conn")
+		return conn.QueryRow(ctx, sql, args...)
+	} else {
+		log.V(1).Info("running with normal conn")
+		return pool.QueryRow(ctx, sql, args...)
+	}
 }
 
 func (r *pgxResourceStore) Create(ctx context.Context, resource core_model.Resource, fs ...store.CreateOptionsFunc) error {
@@ -125,7 +156,7 @@ func (r *pgxResourceStore) Create(ctx context.Context, resource core_model.Resou
 	if pgxTx, ok := tx.(pgx.Tx); exist && ok {
 		_, err = pgxTx.Exec(ctx, statement, args...)
 	} else {
-		_, err = r.pool.Exec(ctx, statement, args...)
+		_, err = r.ExecWithCtx(ctx, r.pool, statement, args...)
 	}
 	if err != nil {
 		if strings.Contains(err.Error(), duplicateKeyErrorMsg) {
@@ -190,7 +221,7 @@ func (r *pgxResourceStore) Update(ctx context.Context, resource core_model.Resou
 	if pgxTx, ok := tx.(pgx.Tx); exist && ok {
 		result, err = pgxTx.Exec(ctx, statement, args...)
 	} else {
-		result, err = r.pool.Exec(ctx, statement, args...)
+		result, err = r.ExecWithCtx(ctx, r.pool, statement, args...)
 	}
 	if err != nil {
 		return errors.Wrapf(err, "failed to execute query %s", statement)
@@ -222,7 +253,7 @@ func (r *pgxResourceStore) Delete(ctx context.Context, resource core_model.Resou
 	if pgxTx, ok := tx.(pgx.Tx); exist && ok {
 		result, err = pgxTx.Exec(ctx, statement, args...)
 	} else {
-		result, err = r.pool.Exec(ctx, statement, args...)
+		result, err = r.ExecWithCtx(ctx, r.pool, statement, args...)
 	}
 	if err != nil {
 		return errors.Wrapf(err, "failed to execute query: %s", statement)
@@ -248,7 +279,7 @@ func (r *pgxResourceStore) Get(ctx context.Context, resource core_model.Resource
 		if opts.Consistent {
 			pool = r.pool
 		}
-		row = pool.QueryRow(ctx, statement, args...)
+		row = r.RowWithCtx(ctx, pool, statement, args...)
 	}
 
 	var spec string
