@@ -78,7 +78,9 @@ spec:
                       - type: string
                       x-kubernetes-int-or-string: true
                   required:
+                  - name
                   - port
+                  - targetPort
                   type: object
                 type: array
                 x-kubernetes-list-map-keys:
@@ -91,6 +93,8 @@ spec:
                     properties:
                       name:
                         type: string
+                    required:
+                    - name
                     type: object
                   dataplaneTags:
                     additionalProperties:
@@ -106,6 +110,10 @@ spec:
                 - Available
                 - Unavailable
                 type: string
+            required:
+            - identities
+            - ports
+            - state
             type: object
           status:
             description: Status is the current status of the Kuma MeshService resource.

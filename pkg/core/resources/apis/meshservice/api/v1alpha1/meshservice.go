@@ -16,15 +16,16 @@ type Selector struct {
 }
 
 type DataplaneRef struct {
-	Name string `json:"name,omitempty"`
+	Name string `json:"name"`
 }
 
 type Port struct {
-	Name       string             `json:"name,omitempty"`
+	Name       string             `json:"name"`
 	Port       uint32             `json:"port"`
-	TargetPort intstr.IntOrString `json:"targetPort,omitempty"`
+	TargetPort intstr.IntOrString `json:"targetPort"`
+	// +kubebuilder:validation:Optional
 	// +kubebuilder:default=tcp
-	AppProtocol core_mesh.Protocol `json:"appProtocol,omitempty"`
+	AppProtocol core_mesh.Protocol `json:"appProtocol"`
 }
 
 const maxNameLength = 63
@@ -40,15 +41,15 @@ type MeshService struct {
 	// State of MeshService. Available if there is at least one healthy endpoint. Otherwise, Unavailable.
 	// It's used for cross zone communication to check if we should send traffic to it, when MeshService is aggregated into MeshMultiZoneService.
 	// +kubebuilder:default=Unavailable
-	State    State    `json:"state,omitempty"`
+	State    State    `json:"state"`
 	Selector Selector `json:"selector,omitempty"`
 	// +patchMergeKey=port
 	// +patchStrategy=merge
 	// +listType=map
 	// +listMapKey=port
 	// +listMapKey=appProtocol
-	Ports      []Port                `json:"ports,omitempty"`
-	Identities []MeshServiceIdentity `json:"identities,omitempty"`
+	Ports      []Port                `json:"ports"`
+	Identities []MeshServiceIdentity `json:"identities"`
 }
 
 type VIP struct {

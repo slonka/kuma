@@ -53,7 +53,9 @@ properties:
                 - type: string
               x-kubernetes-int-or-string: true
           required:
+            - name
             - port
+            - targetPort
           type: object
         type: array
         x-kubernetes-list-map-keys:
@@ -66,6 +68,8 @@ properties:
             properties:
               name:
                 type: string
+            required:
+              - name
             type: object
           dataplaneTags:
             additionalProperties:
@@ -81,6 +85,10 @@ properties:
           - Available
           - Unavailable
         type: string
+    required:
+      - identities
+      - ports
+      - state
     type: object
   creationTime:
     readOnly: true

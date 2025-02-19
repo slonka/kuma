@@ -155,9 +155,13 @@ func (in *Selector) DeepCopyInto(out *Selector) {
 	*out = *in
 	if in.DataplaneTags != nil {
 		in, out := &in.DataplaneTags, &out.DataplaneTags
-		*out = make(DataplaneTags, len(*in))
-		for key, val := range *in {
-			(*out)[key] = val
+		*out = new(map[string]string)
+		if **in != nil {
+			in, out := *in, *out
+			*out = make(map[string]string, len(*in))
+			for key, val := range *in {
+				(*out)[key] = val
+			}
 		}
 	}
 	if in.DataplaneRef != nil {

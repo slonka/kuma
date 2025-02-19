@@ -103,7 +103,7 @@ func (g *Generator) meshServicesForDataplane(dataplane *core_mesh.DataplaneResou
 	for serviceTag, ports := range portsByService {
 		ms := meshservice_api.MeshService{
 			Selector: meshservice_api.Selector{
-				DataplaneTags: meshservice_api.DataplaneTags{
+				DataplaneTags: &meshservice_api.DataplaneTags{
 					mesh_proto.ServiceTag: serviceTag,
 				},
 			},
