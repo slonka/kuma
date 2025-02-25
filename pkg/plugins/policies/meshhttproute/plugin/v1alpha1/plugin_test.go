@@ -347,7 +347,7 @@ var _ = Describe("MeshHTTPRoute", func() {
 				Zone:       "zone-1",
 				APIVersion: envoy.APIV3,
 			}
-			proxy, err := builder.Build(context.Background(), core_model.ResourceKey{Name: dp.GetMeta().GetName(), Mesh: dp.GetMeta().GetMesh()}, *mc)
+			proxy, err := builder.Build(context.Background(), core_model.ResourceKey{Name: dp.GetMeta().GetName(), Mesh: dp.GetMeta().GetMesh()}, &core_xds.DataplaneMetadata{}, *mc)
 			Expect(err).ToNot(HaveOccurred())
 
 			proxy.Outbounds = xds_types.Outbounds{{
@@ -366,11 +366,11 @@ var _ = Describe("MeshHTTPRoute", func() {
 				Meta: &test_model.ResourceMeta{Name: "example", Mesh: "default"},
 				Spec: &meshexternalservice_api.MeshExternalService{
 					Match: meshexternalservice_api.Match{
-						Type:     pointer.To(meshexternalservice_api.HostnameGeneratorType),
+						Type:     meshexternalservice_api.HostnameGeneratorType,
 						Port:     9090,
 						Protocol: core_mesh.ProtocolHTTP,
 					},
-					Endpoints: []meshexternalservice_api.Endpoint{
+					Endpoints: &[]meshexternalservice_api.Endpoint{
 						{
 							Address: "example.com",
 							Port:    meshexternalservice_api.Port(10000),
@@ -398,11 +398,11 @@ var _ = Describe("MeshHTTPRoute", func() {
 				Meta: &test_model.ResourceMeta{Name: "example", Mesh: "default"},
 				Spec: &meshexternalservice_api.MeshExternalService{
 					Match: meshexternalservice_api.Match{
-						Type:     pointer.To(meshexternalservice_api.HostnameGeneratorType),
+						Type:     meshexternalservice_api.HostnameGeneratorType,
 						Port:     9090,
 						Protocol: core_mesh.ProtocolHTTP,
 					},
-					Endpoints: []meshexternalservice_api.Endpoint{
+					Endpoints: &[]meshexternalservice_api.Endpoint{
 						{
 							Address: "example.com",
 							Port:    meshexternalservice_api.Port(10000),
@@ -484,11 +484,11 @@ var _ = Describe("MeshHTTPRoute", func() {
 				Meta: &test_model.ResourceMeta{Name: "example", Mesh: "default"},
 				Spec: &meshexternalservice_api.MeshExternalService{
 					Match: meshexternalservice_api.Match{
-						Type:     pointer.To(meshexternalservice_api.HostnameGeneratorType),
+						Type:     meshexternalservice_api.HostnameGeneratorType,
 						Port:     9090,
 						Protocol: core_mesh.ProtocolHTTP,
 					},
-					Endpoints: []meshexternalservice_api.Endpoint{
+					Endpoints: &[]meshexternalservice_api.Endpoint{
 						{
 							Address: "example.com",
 							Port:    meshexternalservice_api.Port(10000),
@@ -555,11 +555,11 @@ var _ = Describe("MeshHTTPRoute", func() {
 				Meta: &test_model.ResourceMeta{Name: "example", Mesh: "default"},
 				Spec: &meshexternalservice_api.MeshExternalService{
 					Match: meshexternalservice_api.Match{
-						Type:     pointer.To(meshexternalservice_api.HostnameGeneratorType),
+						Type:     meshexternalservice_api.HostnameGeneratorType,
 						Port:     9090,
 						Protocol: core_mesh.ProtocolHTTP,
 					},
-					Endpoints: []meshexternalservice_api.Endpoint{
+					Endpoints: &[]meshexternalservice_api.Endpoint{
 						{
 							Address: "example.com",
 							Port:    meshexternalservice_api.Port(10000),
@@ -590,11 +590,11 @@ var _ = Describe("MeshHTTPRoute", func() {
 				Meta: &test_model.ResourceMeta{Name: "example", Mesh: "default"},
 				Spec: &meshexternalservice_api.MeshExternalService{
 					Match: meshexternalservice_api.Match{
-						Type:     pointer.To(meshexternalservice_api.HostnameGeneratorType),
+						Type:     meshexternalservice_api.HostnameGeneratorType,
 						Port:     9090,
 						Protocol: core_mesh.ProtocolHTTP,
 					},
-					Endpoints: []meshexternalservice_api.Endpoint{
+					Endpoints: &[]meshexternalservice_api.Endpoint{
 						{
 							Address: "example.com",
 							Port:    meshexternalservice_api.Port(10000),
@@ -603,7 +603,7 @@ var _ = Describe("MeshHTTPRoute", func() {
 					Tls: &meshexternalservice_api.Tls{
 						Enabled: true,
 						Verification: &meshexternalservice_api.Verification{
-							Mode: pointer.To(meshexternalservice_api.TLSVerificationSkipAll),
+							Mode: meshexternalservice_api.TLSVerificationSkipAll,
 						},
 					},
 				},
@@ -628,11 +628,11 @@ var _ = Describe("MeshHTTPRoute", func() {
 				Meta: &test_model.ResourceMeta{Name: "example", Mesh: "default"},
 				Spec: &meshexternalservice_api.MeshExternalService{
 					Match: meshexternalservice_api.Match{
-						Type:     pointer.To(meshexternalservice_api.HostnameGeneratorType),
+						Type:     meshexternalservice_api.HostnameGeneratorType,
 						Port:     9090,
 						Protocol: core_mesh.ProtocolHTTP,
 					},
-					Endpoints: []meshexternalservice_api.Endpoint{
+					Endpoints: &[]meshexternalservice_api.Endpoint{
 						{
 							Address: "example.com",
 							Port:    meshexternalservice_api.Port(10000),
