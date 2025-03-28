@@ -1,6 +1,12 @@
 package cmd
 
 import (
+	"github.com/go-logr/zapr"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"k8s.io/klog/v2"
+	os2 "os"
+	kube_log_zap "sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"time"
 
 	"github.com/spf13/cobra"

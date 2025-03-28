@@ -6,16 +6,12 @@ import (
 	"os"
 
 	"github.com/go-logr/logr"
-	"github.com/go-logr/zapr"
-	"github.com/pkg/errors"
-	"go.opentelemetry.io/otel/trace"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
-	"gopkg.in/natefinch/lumberjack.v2"
-	kube_log_zap "sigs.k8s.io/controller-runtime/pkg/log/zap"
-
 	"github.com/kumahq/kuma/pkg/multitenant"
 	logger_extensions "github.com/kumahq/kuma/pkg/plugins/extensions/logger"
+	"github.com/pkg/errors"
+	"go.opentelemetry.io/otel/trace"
+	"gopkg.in/natefinch/lumberjack.v2"
+	"k8s.io/klog/v2/textlogger"
 )
 
 type LogLevel int
@@ -66,30 +62,9 @@ func NewLoggerWithRotation(level LogLevel, outputPath string, maxSize int, maxBa
 }
 
 func NewLoggerTo(destWriter io.Writer, level LogLevel) logr.Logger {
-	return zapr.NewLogger(newZapLoggerTo(destWriter, level))
-}
-
-func newZapLoggerTo(destWriter io.Writer, level LogLevel, opts ...zap.Option) *zap.Logger {
-	var lvl zap.AtomicLevel
-	switch level {
-	case OffLevel:
-		return zap.NewNop()
-	case DebugLevel:
-		// The value we pass here is the most verbose level that
-		// will end up being emitted through the `V(level int)`
-		// accessor. Passing -10 ensures that levels up to `V(10)`
-		// will work, which seems like plenty.
-		lvl = zap.NewAtomicLevelAt(-10)
-		opts = append(opts, zap.AddStacktrace(zap.ErrorLevel))
-	default:
-		lvl = zap.NewAtomicLevelAt(zap.InfoLevel)
-	}
-	encCfg := zap.NewDevelopmentEncoderConfig()
-	enc := zapcore.NewConsoleEncoder(encCfg)
-	sink := zapcore.AddSync(destWriter)
-	opts = append(opts, zap.AddCallerSkip(1), zap.ErrorOutput(sink))
-	return zap.New(zapcore.NewCore(&kube_log_zap.KubeAwareEncoder{Encoder: enc, Verbose: level == DebugLevel}, sink, lvl)).
-		WithOptions(opts...)
+	config := textlogger.NewConfig(textlogger.Verbosity(int(level)), textlogger.Output(destWriter))
+	logger := textlogger.NewLogger(config)
+	return logger
 }
 
 const TenantLoggerKey = "tenantID"
