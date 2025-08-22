@@ -19,7 +19,7 @@ func Inspect() {
 	const meshName = "inspect"
 
 	BeforeAll(func() {
-		Expect(multizone.Global.Install(MTLSMeshUniversal(meshName))).To(Succeed())
+		Expect(multizone.Global.Install(MTLSMeshWithMeshServicesUniversal(meshName, "Exclusive"))).To(Succeed())
 		Expect(multizone.Global.Install(MeshTrafficPermissionAllowAllUniversal(meshName))).To(Succeed())
 		Expect(multizone.Global.Install(TimeoutUniversal(meshName))).To(Succeed())
 		Expect(WaitForMesh(meshName, multizone.Zones())).To(Succeed())
