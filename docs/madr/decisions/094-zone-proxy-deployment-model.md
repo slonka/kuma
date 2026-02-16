@@ -27,7 +27,8 @@ This architectural change requires revisiting the deployment model for zone prox
 
 This document addresses the following questions:
 
-1. Should we continue supporting `kuma.io/ingress-public-address` annotation?
+1. Should we continue supporting `kuma.io/ingress-public-address` annotation
+   (overrides zone ingress's auto-detected public address for external reachability)?
 2. What should be the default Helm installation behavior for zone proxies?
 
 Note: Whether zone ingress and egress share a single deployment is addressed in a separate MADR. [^2]
@@ -151,15 +152,12 @@ Generates `values.yaml` with `ingress.enabled: true` / `egress.enabled: true` (e
 │ ☑ payments    Ingress: [Yes ▼]  Egress: [Yes ▼]        │
 │ ☐ backend     Ingress: [--- ▼]  Egress: [--- ▼]        │
 │                                                         │
-│ If no meshes exist:                                     │
-│ "No meshes found — generate values to create the        │
-│  default mesh?"                                         │
 └─────────────────────────────────────────────────────────┘
 ```
 
 All detected meshes are auto-filled as entries. Each mesh has its own ingress/egress toggles, mirroring the per-mesh structure in the `meshes` schema. Users can deselect meshes they don't need zone proxies for — deselected meshes are excluded from the generated `values.yaml`.
 
-**Empty state**: If no mesh exists yet, the UI prompts the user to generate a `values.yaml` that creates a `default` mesh. Zone proxies targeting a not-yet-created mesh will retry automatically (see Mesh validation behavior above).
+**Mesh-first requirement**: The Konnect UI requires at least one mesh to exist before generating zone proxy values.
 
 **Step 2: Generated values.yaml**
 
