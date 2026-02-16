@@ -23,8 +23,7 @@ This architectural change requires revisiting the deployment model for zone prox
 
 **Scope of this document**: This MADR focuses on **deployment tooling** — how users deploy zone proxies via Helm, Konnect UI, and Terraform.
 
-**Single-mesh focus**: This document assumes **single-mesh-per-zone as the default** deployment pattern.
-Multi-mesh scenarios are out of scope for this document. Users who need multiple meshes per zone can write their own zone proxy deployment.
+**Multi-mesh support**: The `meshes` list supports deploying zone proxies for multiple meshes in a single Helm release. Single-mesh is the simplest case — one entry in the list.
 
 This document addresses the following questions:
 
@@ -40,12 +39,14 @@ Note: Whether zone ingress and egress share a single deployment is addressed in 
 | Per-mesh Services | **Yes** - each mesh gets its own Service/LoadBalancer for mTLS isolation |
 | Namespace placement | **kuma-system** |
 | Deployment mechanism | **Helm-managed** (current pattern extended for mesh-scoped zone proxies) |
-| Helm release structure | **Single release** (CP + zone proxy in one chart) |
+| Helm release structure | **Mesh subchart** (each mesh entry rendered by a subchart) |
+| MADR 093 relaxation | **Yes** - allow multiple meshes per namespace, handle Workload collisions in controller |
+| Additive migration | **Yes** - `meshes` config alongside existing `ingress`/`egress` keys |
 
 | Question | Decision |
 |----------|----------|
 | 1. Support ingress-public-address? | **Yes** - keep as escape hatch |
-| 2. Default Helm behavior? | `zoneProxy.enabled: false` — explicit opt-in, like `ingress.enabled` |
+| 2. Default Helm behavior? | `meshes: []` — explicit opt-in, no zone proxies deployed by default |
 
 Note: Resource model (Dataplane representation, labels, tokens, workload identity) is in a separate MADR. [^1]
 Note: Zone proxy deployment topology (shared vs separate ingress/egress) is addressed in a separate MADR. [^2]
@@ -62,8 +63,52 @@ This document is organized in two parts:
 
 ### Tooling and User Flows
 
-With zone proxies becoming mesh-scoped, users need to specify which mesh their zone proxy should serve.
-For the single-mesh default case, this is straightforward — one mesh per zone.
+With zone proxies becoming mesh-scoped, users configure zone proxies per mesh via the `meshes` list in `values.yaml`. Each entry in `meshes` is rendered by a mesh subchart that manages the zone proxy Deployment(s), Service(s), HPA, PDB, ServiceAccount, and optionally the Mesh resource and default policies.
+
+For single-mesh deployments, the `meshes` list has one entry. Multi-mesh deployments add additional entries.
+
+**Full mesh entry schema**:
+
+```yaml
+meshes:
+  - name: <mesh-name>            # Required. Name of the mesh this entry targets.
+    createMesh: false             # Optional. Render a Mesh resource (unfederated zones only).
+    createPolicies:               # Optional. Map of default policies to create with the mesh.
+      MeshCircuitBreaker: true    # Default circuit breaker for all traffic.
+      MeshRetry: true             # Default retry config (TCP + HTTP/GRPC).
+      MeshTimeout: true           # Default timeouts for sidecars + gateways.
+      TrafficPermission: true     # Allow-all traffic permission (requires createMeshDefaultRoutingResources=true).
+      TrafficRoute: true          # Default load-balancing route (requires createMeshDefaultRoutingResources=true).
+
+    # Zone proxy deployment — choose EITHER ingress/egress OR combinedProxies (not both).
+
+    ingress:                      # Separate ingress deployment.
+      enabled: true
+      podSpec: {}
+      hpa: {}
+      pdb: {}
+      service:
+        name: ""                  # Optional override for auto-generated Service name.
+      resources: {}
+
+    egress:                       # Separate egress deployment.
+      enabled: true
+      podSpec: {}
+      hpa: {}
+      pdb: {}
+      service:
+        name: ""                  # Optional override for auto-generated Service name.
+      resources: {}
+
+    combinedProxies:              # Single deployment running both ingress + egress roles.
+      enabled: true               # Mutually exclusive with ingress/egress above.
+      podSpec: {}
+      hpa: {}
+      pdb: {}
+      service:
+        name: ""                  # Optional override for auto-generated Service name.
+      resources: {}
+```
 
 Deployment contexts:
 
@@ -89,20 +134,20 @@ Deployment contexts:
 
 Generates `values.yaml` with `ingress.enabled: true` / `egress.enabled: true` (explicit opt-in)
 
-##### Proposed Flow (Single-Mesh Default)
+##### Proposed Flow
 
 **Step 1: UI Enhancement**
-
-For single-mesh deployments (the common case):
 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │ Connect zone                                            │
 ├─────────────────────────────────────────────────────────┤
 │                                                         │
-│ Mesh: [default ▼]                                       │
-│ If multiple meshes detected - there will be info here   │
-│ how to handle that                                      │
+│ Detected meshes:                                        │
+│                                                         │
+│ ☑ default     Ingress: [Yes ▼]  Egress: [Yes ▼]        │
+│ ☑ payments    Ingress: [Yes ▼]  Egress: [Yes ▼]        │
+│ ☐ backend     Ingress: [--- ▼]  Egress: [--- ▼]        │
 │                                                         │
 │ If no meshes exist:                                     │
 │ "No meshes found — generate values to create the        │
@@ -110,11 +155,13 @@ For single-mesh deployments (the common case):
 └─────────────────────────────────────────────────────────┘
 ```
 
+All detected meshes are auto-filled as entries. Each mesh has its own ingress/egress toggles, mirroring the per-mesh structure in the `meshes` schema. Users can deselect meshes they don't need zone proxies for — deselected meshes are excluded from the generated `values.yaml`.
+
 **Empty state**: If no mesh exists yet, the UI shows an empty state prompting the user to generate a `values.yaml` that creates a `default` mesh. The zone proxy can also be deployed targeting a mesh name that doesn't exist yet — it will wait and retry until the mesh is created.
 
 **Step 2: Generated values.yaml**
 
-The generated values.yaml always includes the `mesh` field explicitly:
+The generated values.yaml uses the `meshes` list:
 
 ```yaml
 kuma:
@@ -123,9 +170,12 @@ kuma:
     zone: zone-1
     kdsGlobalAddress: grpcs://us.mesh.sync.konghq.tech:443
 
-  zoneProxy:
-    enabled: true
-    mesh: default
+  meshes:
+    - name: default
+      ingress:
+        enabled: true
+      egress:
+        enabled: true
 ```
 
 Note: Zone proxy can be deployed before the mesh exists. It will wait and retry until the mesh is created on the Global CP.
@@ -135,7 +185,7 @@ Note: Zone proxy can be deployed before the mesh exists. It will wait and retry 
 - Konnect UI has API access to global CP
 - Can fetch mesh list via `GET /meshes`
 - Validation happens UI-side before generating values.yaml
-- If multiple meshes exist in the zone, the UI should inform the user that additional zone proxies must be configured manually
+- If multiple meshes exist in the zone, the UI can generate multiple entries in the `meshes` list
 
 #### Flow 2: Self-Hosted Global CP (Helm)
 
@@ -148,12 +198,15 @@ kuma:
     zone: zone-1
     kdsGlobalAddress: grpcs://global-cp:5685
 
-  zoneProxy:
-    enabled: true
-    # mesh defaults to "default", explicit only if different
+  meshes:
+    - name: default
+      ingress:
+        enabled: true
+      egress:
+        enabled: true
 ```
 
-- Helm deploys zone proxy Deployment
+- Helm renders the mesh subchart for each entry in `meshes`
 - Zone proxy connects to CP, requests config for the configured mesh
 - **If mesh doesn't exist**: CP returns error, zone proxy logs warning, retries
 - **User experience**: Check zone proxy logs, see "mesh 'default' not found"
@@ -167,6 +220,10 @@ Code references:
 
 This matches the "eventual consistency" model Kuma already uses.
 
+##### Multi-Mesh Variant
+
+For multi-mesh, add additional entries to the `meshes` list — each renders independently.
+
 #### Flow 3: Unfederated Zone (Standalone)
 
 ##### Single-Mesh (Default)
@@ -178,32 +235,24 @@ kuma:
     zone: zone-1
     # No kdsGlobalAddress = unfederated
 
-  zoneProxy:
-    enabled: true
-    mesh: default
-    replicas: 1
+  meshes:
+    - name: default
+      createMesh: true
+      ingress:
+        enabled: true
+      egress:
+        enabled: true
 ```
 
-**Mesh creation in unfederated zones**: Unlike federated zones (where the mesh is synced from the Global CP), unfederated zones will create the mesh locally. There are two mechanisms:
+**Mesh creation in unfederated zones**: Unlike federated zones (where the mesh is synced from the Global CP), unfederated zones create the mesh locally. The `createMesh` field controls this:
 
-1. **CP auto-creation**: When `skipMeshCreation: false` (the default), the CP creates the `default` mesh at startup (`EnsureDefaultMeshExists` in `pkg/defaults/mesh.go`). This only creates a mesh named `default` — non-default mesh names are not auto-created.
+1. **`createMesh: true`**: The mesh subchart renders a Mesh resource. This is needed for unfederated zones where no Global CP syncs meshes.
 
-2. **Helm template**: For non-default mesh names, or when `skipMeshCreation: true`, Helm creates the Mesh resource (the CP only auto-creates the `default` mesh):
+2. **CP auto-creation**: When `skipMeshCreation: false` (the default), the CP creates the `default` mesh at startup (`EnsureDefaultMeshExists` in `pkg/defaults/mesh.go`). This only creates a mesh named `default` — non-default mesh names require `createMesh: true`.
 
-```yaml
-{{- if and .Values.zoneProxy.enabled (not .Values.controlPlane.kdsGlobalAddress) }}
-  {{- if or .Values.controlPlane.defaults.skipMeshCreation (ne .Values.zoneProxy.mesh "default") }}
-  {{- /* Unfederated zone - create mesh locally */}}
-apiVersion: kuma.io/v1alpha1
-kind: Mesh
-metadata:
-  name: {{ .Values.zoneProxy.mesh }}
----
-  {{- end }}
-{{- end }}
-```
+3. **Conditional rendering**: The subchart only renders the Mesh resource when `createMesh: true` AND no `kdsGlobalAddress` is configured (unfederated). For federated zones, `createMesh` is ignored since meshes are synced from the Global CP.
 
-For the common case (`zoneProxy.mesh: default` + `skipMeshCreation: false`), the inner condition is false so the Helm template does not render the Mesh resource — the CP handles it.
+For the common case (`name: default` + `skipMeshCreation: false`), the user can omit `createMesh` — the CP handles default mesh creation automatically.
 
 #### Flow 4: Terraform
 
@@ -248,10 +297,12 @@ kuma:
     zone: ${zone}
     kdsGlobalAddress: ${kds_global_address}
 
-  zoneProxy:
-    enabled: true
-    mesh: ${mesh}
-    replicas: 1
+  meshes:
+    - name: ${mesh}
+      ingress:
+        enabled: true
+      egress:
+        enabled: true
 ```
 
 **Validation:** Same runtime model as Helm — zone proxy retries until the mesh exists on the Global CP. Terraform's `depends_on` ensures the mesh is created in Konnect/Global CP before the Helm release is applied, so in practice the mesh will already exist by the time the zone proxy starts.
@@ -287,7 +338,7 @@ resource "helm_release" "zone_proxy" {
 |------|-------------------|----------|
 | **Konnect UI** | Yes (API access) | Pre-populate mesh dropdown, validate before generating YAML |
 | **Helm (federated)** | No (offline install) | Accept name, fail gracefully at runtime with clear logs |
-| **Helm (unfederated)** | Yes (creates mesh) | Cross-reference in templates, fail at install if mismatch |
+| **Helm (unfederated)** | Yes (creates mesh) | `createMesh: true` in subchart, fail at install if mismatch |
 | **Terraform** | Via `depends_on` | `helm_release` with `templatefile()`; `depends_on` ensures mesh exists before zone proxy |
 
 #### Design Decisions
@@ -330,15 +381,19 @@ This prevents name collisions when multiple meshes are deployed.
 {{ if gt (len (include "kuma.zoneProxy.serviceName" .)) 63 }} {{ fail "zone proxy service name exceeds 63 characters; use zoneProxy.service.name to set a shorter name" }} {{ end }}
 ```
 
-To handle long mesh names, expose `zoneProxy.service.name` as an optional override (matching the existing `ingress.service.name` pattern in `_helpers.tpl:65-68`):
+To handle long mesh names, expose a `service.name` override per mesh entry (matching the existing `ingress.service.name` pattern in `_helpers.tpl:65-68`):
 
 ```yaml
-zoneProxy:
-  enabled: true
-  mesh: my-very-long-mesh-name-that-exceeds-limits
-  service:
-    name: zp-long-mesh  # Override when auto-generated name is too long
-    spec: {}             # Additional Service spec fields if needed
+meshes:
+  - name: my-very-long-mesh-name-that-exceeds-limits
+    ingress:
+      enabled: true
+      service:
+        name: zp-long-mesh-ingress  # Override when auto-generated name is too long
+    egress:
+      enabled: true
+      service:
+        name: zp-long-mesh-egress
 ```
 
 **Cost implication**: More LoadBalancers = higher cloud cost.
@@ -346,91 +401,130 @@ Users can use NodePort or Ingress controllers to reduce LB count if needed.
 
 ##### 3. Migration Path from Global Zone Proxies
 
-**No automatic changes on upgrade**: Since `zoneProxy.enabled` defaults to `false`, running `helm upgrade` with existing values will not deploy mesh-scoped zone proxies or modify the current ingress/egress setup. Migration is entirely opt-in.
+**Additive migration**: The `meshes` config is added alongside the existing `ingress`/`egress` keys in the chart.
 
-**Phased migration**:
+- **Phase 1**: Add `meshes` support, old keys still functional
+- **Phase 2**: Add deprecation warnings for old keys
+- **Phase 3**: Remove old keys in future major release
 
-1. **Phase 1**: Deploy mesh-scoped zone proxies alongside global ones
-2. **Phase 2**: Update MeshIdentity/policies to use mesh-scoped proxies
-3. **Phase 3**: Drain traffic from global zone proxies
-4. **Phase 4**: Remove global zone proxy deployment
+**Traffic migration** (switching live traffic from global to mesh-scoped zone proxies) is out of scope for this MADR and will be addressed separately.
 
-**Helm migration (single-mesh)**:
-```yaml
-# Before (global)
-ingress:
-  enabled: true
-egress:
-  enabled: true
+##### 4. Helm Release Structure: Mesh Subchart
 
-# After (mesh-scoped)
-ingress:
-  enabled: false  # Disable global
-egress:
-  enabled: false
+Each entry in the `meshes` list is rendered by a **mesh subchart**. The subchart encapsulates all resources for a single mesh's zone proxy deployment.
 
-zoneProxy:
-  enabled: true
-  mesh: default
-```
+**Subchart responsibilities** (per mesh entry):
+- Deployment(s) — zone ingress, zone egress, or combined
+- Service(s) — per-mesh LoadBalancer/NodePort
+- HPA — horizontal pod autoscaler
+- PDB — pod disruption budget
+- ServiceAccount
+- Mesh resource (when `createMesh: true`)
+- Default policies (controlled by `createPolicies` map)
 
-#### Helm Release Structure: Single Release
+| Aspect | Analysis |
+|--------|----------|
+| **Simplicity** | One `helm install` deploys everything; `meshes` list is declarative |
+| **Multi-mesh** | Natural extension — add entries to the list |
+| **Upgrades** | Single `helm upgrade` updates all meshes' zone proxies |
+| **Isolation** | Each mesh subchart renders independent resources; no cross-mesh interference |
+| **GitOps** | Single `values.yaml` is the source of truth for all meshes in a zone |
+| **Lifecycle** | Per-mesh lifecycle managed within the subchart (create/update/delete mesh entries independently) |
 
-The zone proxy is part of the main `kuma` chart. A single `helm install` deploys everything:
+**`createPolicies`**: A true/false map controlling which default policies are created alongside the mesh. Derived from `skipCreatingInitialPolicies` in [`api/mesh/v1alpha1/mesh.proto:72-75`](https://github.com/kumahq/kuma/blob/master/api/mesh/v1alpha1/mesh.proto#L72-L75), implemented in [`pkg/defaults/mesh/mesh.go:58-102`](https://github.com/kumahq/kuma/blob/master/pkg/defaults/mesh/mesh.go#L58-L102). The five policies are:
+- **MeshCircuitBreaker** — default circuit breaker for all traffic
+- **MeshRetry** — default retry configuration (TCP + HTTP/GRPC)
+- **MeshTimeout** — default timeouts for sidecars and gateways
+- **TrafficPermission** — allow-all traffic permission (only created when `createMeshDefaultRoutingResources=true`)
+- **TrafficRoute** — default load-balancing route (only created when `createMeshDefaultRoutingResources=true`)
+
+**`combinedProxies`**: A map with the same shape as `ingress`/`egress` (enabled, podSpec, hpa, pdb, service, resources). Merges ingress and egress into a single Deployment. Mutually exclusive with `ingress`/`egress` — Helm validates and errors if a mesh entry defines both. No merging ambiguity: the combined deployment has its own self-contained config. References the separate deployment topology MADR [^2] for analysis of shared vs separate deployments.
+
+**Subchart implementation**: The subchart lives within the main `kuma` chart under `charts/mesh/` (or as a dependency). It is not published separately — users interact with it purely through the `meshes` list in `values.yaml`.
 
 ```bash
-helm install kuma kuma/kuma -f values.yaml
+# Install with mesh subchart entries
+helm install kuma kumahq/kuma -n kuma-system -f values.yaml
 ```
 
 ```yaml
 # values.yaml
-controlPlane:
-  mode: zone
-  zone: zone-1
-
-zoneProxy:
-  enabled: true
-  mesh: default
+meshes:
+  - name: default
+    ingress:
+      enabled: true
+    egress:
+      enabled: true
 ```
 
-| Aspect | Analysis |
-|--------|----------|
-| **Simplicity** | ✅ One command to install everything |
-| **Upgrades** | ✅ Single `helm upgrade` updates all components |
-| **Lifecycle coupling** | ✅ Single-mesh = single lifecycle, no issue |
-| **Failure blast radius** | ⚠️ Bad values.yaml can break entire zone |
-| **GitOps** | ✅ Single source of truth for zone configuration |
+To add a mesh later, update `values.yaml` and upgrade:
 
-**Considered alternative — subchart**: A `kuma-zone-proxy` subchart was considered, allowing standalone releases for additional meshes in multi-mesh scenarios. This was ruled out because maintaining a separate Helm chart adds long-term maintenance burden for a deployment path we don't recommend. Users who need multi-mesh can write their own zone proxy deployment.
+```bash
+helm upgrade kuma kumahq/kuma -n kuma-system -f values.yaml
+```
 
-#### Namespace Placement Options
+##### Considered Alternatives
 
-**K8s Naming Constraint**: Service names are limited to 63 characters (DNS label, RFC 1123). Other resources (Deployments, HPAs, PDBs) use DNS subdomain names (253 chars) and are not a concern. With the naming pattern `<release>-<mesh>-zoneproxy`, long mesh names may exceed the Service name limit. Users can override via `zoneProxy.service.name` (see Per-Mesh Services above).
+1. **Single release with flat `zoneProxy` config** — the previous recommended approach: flat `zoneProxy.enabled`/`zoneProxy.mesh` in the main chart, no subchart. Rejected because it doesn't naturally extend to multi-mesh and doesn't encapsulate mesh lifecycle (mesh creation, default policies).
 
-##### Option A: kuma-system Namespace (Centralized) — Recommended for Single-Mesh
+2. **Zone-proxy subchart** (not mesh subchart) — a standalone `kuma-zone-proxy` subchart for zone proxy releases. Rejected because it's too narrow (only handles zone proxies, not mesh lifecycle) and adds maintenance burden for a partial solution.
+
+3. **Multi-mesh out of scope** — previous decision to leave multi-mesh to users. Reversed because the mesh subchart naturally supports it without additional complexity.
+
+##### 5. Namespace Placement: kuma-system
+
+All meshes' zone proxies are deployed in the `kuma-system` namespace. This is consistent with the MADR 093 relaxation (see [below](#6-relaxation-of-madr-093-one-mesh-per-namespace)) which allows multiple meshes per namespace.
+
+**K8s Naming Constraint**: Service names are limited to 63 characters (DNS label, RFC 1123). Other resources (Deployments, HPAs, PDBs) use DNS subdomain names (253 chars) and are not a concern. With the naming pattern `<release>-<mesh>-zoneproxy`, long mesh names may exceed the Service name limit. Users can override via the per-entry `service.name` field (see Per-Mesh Services above).
+
+**Multi-mesh example** — all zone proxies in `kuma-system`:
 
 ```yaml
-# Zone proxy in kuma-system
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: zone-proxy-default
+  name: zone-proxy-payments-ingress
+  namespace: kuma-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zone-proxy-payments-egress
+  namespace: kuma-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zone-proxy-backend-ingress
+  namespace: kuma-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zone-proxy-backend-egress
   namespace: kuma-system
 ```
 
 | Aspect | Analysis |
 |--------|----------|
-| **Operations** | ✅ All Kuma components in one place |
-| **RBAC** | ✅ Simple - one namespace to grant access |
-| **Monitoring** | ✅ Single namespace to scrape metrics |
-| **Isolation** | ✅ Single-mesh = no isolation concern |
-| **Resource quotas** | ✅ Single-mesh = simple quota management |
-
-##### Recommendation
-
-Deploy zone proxies in `kuma-system` namespace.
+| **Operations** | All Kuma components in one place |
+| **RBAC** | Simple - one namespace to grant access |
+| **Monitoring** | Single namespace to scrape metrics |
+| **Multi-mesh** | MADR 093 relaxation allows coexistence; naming pattern avoids collisions |
 
 **Note on sidecar injection**: Zone proxies run `kuma-dp` directly as standalone Deployments (the same way current ZoneIngress/ZoneEgress work). They connect to the CP via bootstrap, not via sidecar injection. The `kuma-system` namespace does **not** need sidecar injection enabled for zone proxies to function.
+
+##### 6. Relaxation of MADR 093 (One Mesh Per Namespace)
+
+> **This reverses [MADR 093](093-disallow-multiple-meshes-per-k8s-ns.md) (accepted).**
+
+**Why**: The mesh subchart deploys zone proxies for multiple meshes into `kuma-system`. Requiring separate namespaces for each mesh's infrastructure components adds operational complexity with no benefit — zone proxies are infrastructure, not application workloads.
+
+**What changes**: Zone proxies for different meshes coexist in `kuma-system`. More broadly, this is a general relaxation — multiple meshes per namespace are allowed everywhere, not just `kuma-system`.
+
+**Collision handling**: The Workload controller fails with a clear error if a Workload name collision occurs across meshes. For zone proxies this is inherently avoided by the naming pattern `zone-proxy-<mesh>-<role>`, which guarantees unique Workload names per mesh.
+
+**Scope**: General relaxation — allow multiple meshes per namespace everywhere. Handle collisions in the Workload controller rather than preventing the configuration.
 
 ### Question 1: Support kuma.io/ingress-public-address
 
@@ -484,37 +578,51 @@ Use cases for annotation override:
 
 #### Recommendation
 
-**`zoneProxy.enabled: false`** — zone proxy deployment requires explicit opt-in, consistent with the existing `ingress.enabled` / `egress.enabled` pattern:
+**`meshes: []`** — no zone proxies are deployed by default. Zone proxy deployment requires explicit opt-in by adding entries to the `meshes` list:
 
 ```yaml
 controlPlane:
   mode: zone
   zone: zone-1
 
-zoneProxy:
-  enabled: true        # Explicit opt-in (default: false)
-  # mesh defaults to "default"
+# No zone proxies by default
+meshes: []
+
+# Opt-in: add mesh entries
+meshes:
+  - name: default
+    ingress:
+      enabled: true
+    egress:
+      enabled: true
 ```
 
-This avoids a broken state where a zone proxy Deployment targets a mesh that doesn't exist. The `skipMeshCreation` flag is orthogonal — it controls whether the CP auto-creates the `default` Mesh at startup, and is independent of zone proxy deployment.
+This avoids a broken state where zone proxy Deployments target meshes that don't exist. The `skipMeshCreation` flag is orthogonal — it controls whether the CP auto-creates the `default` Mesh at startup, and is independent of zone proxy deployment.
 
 ## Decision
 
 ### Tooling Decisions
 
-1. **Per-mesh Services**: Each mesh gets its own Service/LoadBalancer for proper mTLS isolation.
+1. **Mesh subchart**: Each entry in the `meshes` list is rendered by a mesh subchart that manages Deployment(s), Service(s), HPA, PDB, ServiceAccount, and optionally the Mesh resource and default policies.
+
+2. **Per-mesh Services**: Each mesh gets its own Service/LoadBalancer for proper mTLS isolation.
    Sharing a LoadBalancer would require SNI-based cert selection which adds complexity.
 
-2. **Namespace placement**: Deploy in `kuma-system` namespace.
+3. **Namespace placement**: Deploy all meshes' zone proxies in `kuma-system` namespace.
 
-3. **Deployment mechanism**: **Helm-managed** (current pattern extended for mesh-scoped zone proxies).
-   Helm templates directly render Deployment + Service YAML with per-mesh configuration.
+4. **MADR 093 relaxation**: Allow multiple meshes per namespace everywhere (general relaxation, not scoped to zone proxies only). Handle Workload name collisions in the Workload controller with clear error messages rather than preventing the configuration.
+
+5. **Additive migration**: The `meshes` config is added alongside existing `ingress`/`egress` keys. Old keys are deprecated and removed in a future major release.
+
+6. **`combinedProxies` deployment option**: A map with the same shape as `ingress`/`egress` (enabled, podSpec, hpa, pdb, service, resources), merging ingress and egress into a single Deployment. Mutually exclusive with `ingress`/`egress` — Helm validates and errors if both are defined.
+
+7. **Conditional mesh creation + `createPolicies` map**: `createMesh: true` renders a Mesh resource (for unfederated zones). `createPolicies` is a true/false map controlling which default policies (MeshCircuitBreaker, MeshRetry, MeshTimeout, TrafficPermission, TrafficRoute) are created with the mesh.
 
 ### Design Questions
 
 1. **Keep kuma.io/ingress-public-address**: Support the annotation as an escape hatch for complex network topologies, but document Service-based configuration as the primary method.
 
-2. **Helm defaults**: `zoneProxy.enabled: false` — explicit opt-in, consistent with `ingress.enabled` / `egress.enabled`.
+2. **Helm defaults**: `meshes: []` — explicit opt-in, consistent with `ingress.enabled` / `egress.enabled`.
    The `skipMeshCreation` flag is orthogonal to zone proxy deployment.
 
 Note: Zone proxy deployment topology (shared vs separate ingress/egress) is addressed in a separate MADR. [^2]
@@ -547,6 +655,8 @@ The following topics are covered in a separate MADR:
 | ZoneIngress proto | `api/mesh/v1alpha1/zone_ingress.proto` |
 | ZoneEgress proto | `api/mesh/v1alpha1/zoneegress.proto` |
 | Dataplane proto | `api/mesh/v1alpha1/dataplane.proto` |
+| Mesh proto (skipCreatingInitialPolicies) | `api/mesh/v1alpha1/mesh.proto` |
+| Default mesh policies | `pkg/defaults/mesh/mesh.go` |
 | K8s Ingress converter | `pkg/plugins/runtime/k8s/controllers/ingress_converter.go` |
 | K8s Egress converter | `pkg/plugins/runtime/k8s/controllers/egress_converter.go` |
 | Helm ingress deployment | `deployments/charts/kuma/templates/ingress-deployment.yaml` |
