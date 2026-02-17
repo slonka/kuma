@@ -40,15 +40,15 @@ resources:
             overallSampling:
               value: 10
             provider:
-              name: envoy.tracers.zipkin
+              name: envoy.tracers.opentelemetry
               typedConfig:
-                '@type': type.googleapis.com/envoy.config.trace.v3.ZipkinConfig
-                collectorCluster: system_meshtrace_zipkin_http---jaeger-collector-mesh-observability-9411-api-v2-spans
-                collectorEndpoint: /api/v2/spans
-                collectorEndpointVersion: HTTP_PROTO
-                collectorHostname: jaeger-collector.mesh-observability:9411
-                sharedSpanContext: true
-                traceId128bit: true
+                '@type': type.googleapis.com/envoy.config.trace.v3.OpenTelemetryConfig
+                httpService:
+                  httpUri:
+                    cluster: system_meshtrace_otel_http---jaeger-collector-mesh-observability-4318-v1-traces
+                    timeout: 10s
+                    uri: http://jaeger-collector.mesh-observability:4318/v1/traces
+                serviceName: backend
             randomSampling:
               value: 50
             spawnUpstreamSpan: false
@@ -94,15 +94,15 @@ resources:
             overallSampling:
               value: 10
             provider:
-              name: envoy.tracers.zipkin
+              name: envoy.tracers.opentelemetry
               typedConfig:
-                '@type': type.googleapis.com/envoy.config.trace.v3.ZipkinConfig
-                collectorCluster: system_meshtrace_zipkin_http---jaeger-collector-mesh-observability-9411-api-v2-spans
-                collectorEndpoint: /api/v2/spans
-                collectorEndpointVersion: HTTP_PROTO
-                collectorHostname: jaeger-collector.mesh-observability:9411
-                sharedSpanContext: true
-                traceId128bit: true
+                '@type': type.googleapis.com/envoy.config.trace.v3.OpenTelemetryConfig
+                httpService:
+                  httpUri:
+                    cluster: system_meshtrace_otel_http---jaeger-collector-mesh-observability-4318-v1-traces
+                    timeout: 10s
+                    uri: http://jaeger-collector.mesh-observability:4318/v1/traces
+                serviceName: backend
             randomSampling:
               value: 50
             spawnUpstreamSpan: false
