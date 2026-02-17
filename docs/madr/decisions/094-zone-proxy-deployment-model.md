@@ -148,9 +148,9 @@ Generates `values.yaml` with `ingress.enabled: true` / `egress.enabled: true` (e
 │                                                         │
 │ Detected meshes:                                        │
 │                                                         │
-│ ☑ default     Ingress: [Yes ▼]  Egress: [Yes ▼]        │
-│ ☑ payments    Ingress: [Yes ▼]  Egress: [Yes ▼]        │
-│ ☐ backend     Ingress: [--- ▼]  Egress: [--- ▼]        │
+│ ☑ default     Ingress: [Yes ▼]  Egress: [Yes ▼]         │
+│ ☑ payments    Ingress: [Yes ▼]  Egress: [Yes ▼]         │
+│ ☐ backend     Ingress: [--- ▼]  Egress: [--- ▼]         │
 │                                                         │
 └─────────────────────────────────────────────────────────┘
 ```
