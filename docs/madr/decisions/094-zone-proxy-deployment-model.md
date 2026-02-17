@@ -6,7 +6,7 @@ Technical Story: https://github.com/kumahq/kuma/issues/9030
 
 ## Context and Problem Statement
 
-Currently, zone proxies are **global-scoped** resources, meaning a single ZoneIngress or ZoneEgress instance handles traffic for all meshes in a zone.
+Currently, zone proxies are **global-scoped** resources (global in Kuma's naming convention, meaning cluster-scoped in Kubernetes terms — not global across multiple clusters), meaning a single ZoneIngress or ZoneEgress instance handles traffic for all meshes in a zone.
 This global nature creates fundamental limitations:
 
 1. **Cannot issue MeshIdentity for zone egress**: MeshIdentity is mesh-scoped, but a global zone egress serves multiple meshes.
