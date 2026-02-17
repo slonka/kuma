@@ -399,22 +399,6 @@ All meshes' zone proxies are deployed in the `kuma-system` namespace.
 
 **Collision handling**: The Workload controller fails with a clear error if a Workload name collision occurs across meshes. For zone proxies this is inherently avoided by the naming pattern `zone-proxy-<mesh>-<role>`, which guarantees unique Workload names per mesh.
 
-**Multi-mesh example** — all zone proxies in `kuma-system`:
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: zone-proxy-payments-ingress
-  namespace: kuma-system
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: zone-proxy-payments-egress
-  namespace: kuma-system
-```
-
 For K8s naming constraints and `service.name` overrides, see Per-Mesh Services above.
 
 | Aspect | Analysis |
@@ -447,8 +431,6 @@ No additional implementation is needed for mesh deletion handling - the existing
 
 **Note**: Current ZoneIngress/ZoneEgress resources are NOT covered by this protection (they're global-scoped).
 The move to mesh-scoped Dataplanes resolves this gap.
-
-For single-mesh, cleanup is straightforward: `helm uninstall <release-name>`.
 
 ### Question 1: Support kuma.io/ingress-public-address
 
