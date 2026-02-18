@@ -40,7 +40,7 @@ Note: Whether zone ingress and egress share a single deployment is addressed in 
 | Per-mesh Services | **Yes** - each mesh gets its own Service/LoadBalancer for mTLS isolation |
 | Namespace placement | **kuma-system** |
 | Deployment mechanism | **Helm-managed** (current pattern extended for mesh-scoped zone proxies) |
-| Helm release structure | **Mesh subchart** (each mesh entry rendered by a subchart) |
+| Helm release structure | **Per-mesh templates** (each mesh entry rendered by per-mesh templates) |
 | MADR 093 relaxation | **Yes** - allow multiple meshes per namespace, handle Workload collisions in controller |
 | Additive migration | **Yes** - `meshes` config alongside existing `ingress`/`egress` keys |
 
@@ -64,7 +64,7 @@ This document is organized in two parts:
 
 ### Tooling and User Flows
 
-With zone proxies becoming mesh-scoped, users configure zone proxies per mesh via the `meshes` list in `values.yaml`. Each entry in `meshes` is rendered by a mesh subchart that manages the zone proxy Deployment(s), Service(s), HPA, PDB, ServiceAccount, and optionally the Mesh resource and default policies.
+With zone proxies becoming mesh-scoped, users configure zone proxies per mesh via the `meshes` list in `values.yaml`. Each entry in `meshes` is rendered by per-mesh templates that manage the zone proxy Deployment(s), Service(s), HPA, PDB, ServiceAccount, and optionally the Mesh resource and default policies.
 
 For single-mesh deployments, the `meshes` list has one entry. Multi-mesh deployments add additional entries.
 
@@ -142,20 +142,24 @@ Generates `values.yaml` with `ingress.enabled: true` / `egress.enabled: true` (e
 **Step 1: UI Enhancement**
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│ Connect zone                                            │
-├─────────────────────────────────────────────────────────┤
-│                                                         │
-│ Detected meshes:                                        │
-│                                                         │
-│ ☑ default     Ingress: [Yes ▼]  Egress: [Yes ▼]         │
-│ ☑ payments    Ingress: [Yes ▼]  Egress: [Yes ▼]         │
-│ ☐ backend     Ingress: [--- ▼]  Egress: [--- ▼]         │
-│                                                         │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│ Connect zone                                                             │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│ Detected meshes:                                                         │
+│                                                                          │
+│ ☑ default     Mode: [Separate ▼]  Ingress: [Yes ▼]  Egress: [Yes ▼]     │
+│ ☑ payments    Mode: [Combined ▼]  Ingress: [--- ▼]  Egress: [--- ▼]     │
+│ ☐ backend     Mode: [--------- ▼]  Ingress: [--- ▼]  Egress: [--- ▼]    │
+│                                                                          │
+│ Mode options:                                                            │
+│   Separate — deploy ingress and egress as independent Deployments        │
+│   Combined — deploy a single Deployment running both roles               │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
-All detected meshes are auto-filled as entries. Each mesh has its own ingress/egress toggles, mirroring the per-mesh structure in the `meshes` schema. Users can deselect meshes they don't need zone proxies for — deselected meshes are excluded from the generated `values.yaml`.
+All detected meshes are auto-filled as entries. Each mesh has its own mode selector and ingress/egress toggles, mirroring the per-mesh structure in the `meshes` schema. When "Combined" mode is selected, the Ingress/Egress toggles are disabled (the combined Deployment handles both roles). Users can deselect meshes they don't need zone proxies for — deselected meshes are excluded from the generated `values.yaml`.
 
 **Mesh-first requirement**: The Konnect UI requires at least one mesh to exist before generating zone proxy values.
 
@@ -203,7 +207,7 @@ kuma:
         enabled: true
 ```
 
-- Helm renders the mesh subchart for each entry in `meshes`
+- Helm renders per-mesh templates for each entry in `meshes`
 - Zone proxy connects to CP, requests config for the configured mesh
 - If the mesh doesn't exist yet, the zone proxy retries (see Mesh validation behavior above)
 
@@ -233,11 +237,11 @@ kuma:
 
 **Mesh creation in unfederated zones**: Unlike federated zones (where the mesh is synced from the Global CP), unfederated zones create the mesh locally. The `createMesh` field controls this:
 
-1. **`createMesh: true`**: The mesh subchart renders a Mesh resource. This is needed for unfederated zones where no Global CP syncs meshes.
+1. **`createMesh: true`**: The chart renders a Mesh resource. This is needed for unfederated zones where no Global CP syncs meshes.
 
 2. **CP auto-creation**: When `skipMeshCreation: false` (the default), the CP creates the `default` mesh at startup (`EnsureDefaultMeshExists` in `pkg/defaults/mesh.go`). This only creates a mesh named `default` — non-default mesh names require `createMesh: true`.
 
-3. **Conditional rendering**: The subchart only renders the Mesh resource when `createMesh: true` AND no `kdsGlobalAddress` is configured (unfederated). For federated zones, `createMesh` is ignored since meshes are synced from the Global CP.
+3. **Conditional rendering**: The chart only renders the Mesh resource when `createMesh: true` AND no `kdsGlobalAddress` is configured (unfederated). For federated zones, `createMesh` is ignored since meshes are synced from the Global CP.
 
 For the common case (`name: default` + `skipMeshCreation: false`), the user can omit `createMesh` — the CP handles default mesh creation automatically.
 
@@ -298,11 +302,12 @@ For existing meshes, omit the `konnect_mesh` resource and pass the mesh name as 
 
 #### Design Decisions
 
-##### 1. Helm Release Structure: Mesh Subchart
+##### 1. Helm Release Structure: Per-Mesh Templates
 
-Each entry in the `meshes` list is rendered by a **mesh subchart**. The subchart encapsulates all resources for a single mesh's zone proxy deployment.
+Each entry in the `meshes` list is rendered by **per-mesh templates**. The templates encapsulate all resources for a single mesh's zone proxy deployment.
 
-**Subchart responsibilities** (per mesh entry):
+**Per-mesh template responsibilities** (per mesh entry):
+
 - Deployment(s) — zone ingress, zone egress, or combined
 - Service(s) — per-mesh LoadBalancer/NodePort
 - HPA — horizontal pod autoscaler
@@ -311,20 +316,21 @@ Each entry in the `meshes` list is rendered by a **mesh subchart**. The subchart
 - Mesh resource (when `createMesh: true`)
 - Default policies (controlled by `createPolicies` map)
 
-| Aspect | Analysis |
-|--------|----------|
-| **Simplicity** | One `helm install` deploys everything; `meshes` list is declarative |
-| **Isolation** | Each mesh subchart renders independent resources; no cross-mesh interference |
-| **GitOps** | Single `values.yaml` is the source of truth for all meshes in a zone |
+| Aspect         | Analysis                                                                  |
+|:---------------|:--------------------------------------------------------------------------|
+| **Simplicity** | One `helm install` deploys everything; `meshes` list is declarative       |
+| **Isolation**  | Each mesh entry renders independent resources; no cross-mesh interference |
+| **GitOps**     | Single `values.yaml` is the source of truth for all meshes in a zone      |
 
 **`createPolicies`** controls which default policies are created (see schema above). Derived from `skipCreatingInitialPolicies` in `mesh.proto`.
 
 **`combinedProxies`** merges ingress and egress into a single Deployment. Mutually exclusive with `ingress`/`egress` — Helm validates and errors if both are defined. References the separate deployment topology MADR [^2] for analysis.
 
-**Subchart implementation**: The subchart lives within the main `kuma` chart under `charts/mesh/` (or as a dependency). It is not published separately — users interact with it purely through the `meshes` list in `values.yaml`.
+**Implementation**: The per-mesh templates can be organized as a Helm library chart, a subchart, or named templates within the main chart — this is left to the implementation. Users interact purely through the `meshes` list in `values.yaml`.
+
+From the user's perspective, the install experience is identical to today — only the `values.yaml` content changes:
 
 ```bash
-# Install with mesh subchart entries
 helm install kuma kumahq/kuma -n kuma-system -f values.yaml
 ```
 
@@ -346,11 +352,11 @@ helm upgrade kuma kumahq/kuma -n kuma-system -f values.yaml
 
 ###### Considered Alternatives
 
-1. **Single release with flat `zoneProxy` config** — the previous recommended approach: flat `zoneProxy.enabled`/`zoneProxy.mesh` in the main chart, no subchart. Rejected because it doesn't naturally extend to multi-mesh and doesn't encapsulate mesh lifecycle (mesh creation, default policies).
+1. **Single release with flat `zoneProxy` config** — the previous recommended approach: flat `zoneProxy.enabled`/`zoneProxy.mesh` in the main chart, no per-mesh templates. Rejected because it doesn't naturally extend to multi-mesh and doesn't encapsulate mesh lifecycle (mesh creation, default policies).
 
-2. **Zone-proxy subchart** (not mesh subchart) — a standalone `kuma-zone-proxy` subchart for zone proxy releases. Rejected because it's too narrow (only handles zone proxies, not mesh lifecycle) and adds maintenance burden for a partial solution.
+2. **Separate zone-proxy chart** — a standalone `kuma-zone-proxy` chart for zone proxy releases. Rejected because it's too narrow (only handles zone proxies, not mesh lifecycle) and adds maintenance burden for a partial solution.
 
-3. **Multi-mesh out of scope** — previous decision to leave multi-mesh to users. Reversed because the mesh subchart naturally supports it without additional complexity.
+3. **Multi-mesh out of scope** — previous decision to leave multi-mesh to users. Reversed because the per-mesh template approach naturally supports it without additional complexity.
 
 ##### 2. Per-Mesh Services (Not Shared)
 
@@ -393,7 +399,7 @@ All meshes' zone proxies are deployed in the `kuma-system` namespace.
 
 > **This reverses [MADR 093](093-disallow-multiple-meshes-per-k8s-ns.md) (accepted).**
 
-**Why**: The mesh subchart deploys zone proxies for multiple meshes into `kuma-system`. Requiring separate namespaces for each mesh's infrastructure components adds operational complexity with no benefit — zone proxies are infrastructure, not application workloads.
+**Why**: The chart deploys zone proxies for multiple meshes into `kuma-system`. Requiring separate namespaces for each mesh's infrastructure components adds operational complexity with no benefit — zone proxies are infrastructure, not application workloads.
 
 **What changes**: Zone proxies for different meshes coexist in `kuma-system`. More broadly, this is a general relaxation — multiple meshes per namespace are allowed everywhere, not just `kuma-system`.
 
@@ -466,7 +472,7 @@ This avoids a broken state where zone proxy Deployments target meshes that don't
 
 ### Tooling Decisions
 
-1. **Mesh subchart**: Each entry in the `meshes` list is rendered by a mesh subchart that manages Deployment(s), Service(s), HPA, PDB, ServiceAccount, and optionally the Mesh resource and default policies.
+1. **Per-mesh templates**: Each entry in the `meshes` list is rendered by per-mesh templates that manage Deployment(s), Service(s), HPA, PDB, ServiceAccount, and optionally the Mesh resource and default policies.
 
 2. **Per-mesh Services**: Each mesh gets its own Service/LoadBalancer for proper mTLS isolation.
    Sharing a LoadBalancer would require SNI-based cert selection which adds complexity.
