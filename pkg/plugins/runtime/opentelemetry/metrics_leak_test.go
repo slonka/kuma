@@ -1,6 +1,7 @@
 package opentelemetry
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"runtime"
@@ -10,6 +11,8 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
+	colmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
+	"google.golang.org/grpc"
 
 	"github.com/kumahq/kuma/v2/pkg/core/runtime/component"
 )
@@ -239,4 +242,111 @@ func (s *startCounter) Start(stop <-chan struct{}) error {
 
 func (s *startCounter) NeedLeaderElection() bool {
 	return s.inner.NeedLeaderElection()
+}
+
+// hangingMetricsServer is an OTLP metrics collector that accepts RPCs but
+// never responds, forcing the client's export to block until its context expires.
+type hangingMetricsServer struct {
+	colmetricspb.UnimplementedMetricsServiceServer
+	exportCalls atomic.Int32
+}
+
+func (h *hangingMetricsServer) Export(ctx context.Context, _ *colmetricspb.ExportMetricsServiceRequest) (*colmetricspb.ExportMetricsServiceResponse, error) {
+	h.exportCalls.Add(1)
+	// Block until the client gives up (context deadline).
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// TestMetricsPusherHangingCollectorGoroutineLeak uses a real gRPC server that
+// accepts Export RPCs but never responds. This forces the shutdown's final export
+// to consume the full 5s context timeout. We then check whether gRPC connection
+// goroutines leak across restart cycles.
+//
+// Key finding: the OTel SDK's client.Shutdown calls conn.Close() unconditionally
+// (even with an expired context), so goroutines are properly cleaned up. The test
+// confirms this, while still demonstrating the shutdown-error-return bug.
+func TestMetricsPusherHangingCollectorGoroutineLeak(t *testing.T) {
+	// Start a real gRPC server with a hanging Export handler.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv := grpc.NewServer()
+	collector := &hangingMetricsServer{}
+	colmetricspb.RegisterMetricsServiceServer(srv, collector)
+	go func() {
+		_ = srv.Serve(ln)
+	}()
+	defer srv.Stop()
+
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", fmt.Sprintf("http://%s", ln.Addr().String()))
+	t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", "true")
+
+	registry := prometheus.NewRegistry()
+	counter := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "test_hanging_total",
+		Help: "test counter",
+	})
+	registry.MustRegister(counter)
+	counter.Inc()
+
+	// Let the runtime settle before measuring goroutines.
+	runtime.GC()
+	time.Sleep(200 * time.Millisecond)
+	goroutinesBefore := runtime.NumGoroutine()
+
+	const cycles = 3
+	for i := 0; i < cycles; i++ {
+		mp := &metricsPusher{
+			gatherer: registry,
+			log:      logr.Discard(),
+		}
+
+		stop := make(chan struct{})
+		errCh := make(chan error, 1)
+		go func() {
+			errCh <- mp.Start(stop)
+		}()
+
+		// Let the PeriodicReader start and the gRPC connection establish.
+		time.Sleep(500 * time.Millisecond)
+
+		// Stop — triggers provider.Shutdown(5s). The hanging server holds the
+		// Export RPC open, so the final export blocks for the full 5s.
+		close(stop)
+
+		select {
+		case startErr := <-errCh:
+			t.Logf("cycle %d: Start() returned: %v", i+1, startErr)
+			if startErr != nil {
+				t.Logf("  ↳ BUG: should log and return nil (like the tracer does)")
+			}
+		case <-time.After(15 * time.Second):
+			t.Fatalf("cycle %d: Start() did not return within 15s", i+1)
+		}
+	}
+
+	t.Logf("Export was called %d times by the hanging server", collector.exportCalls.Load())
+
+	// Let gRPC connections finish closing.
+	time.Sleep(2 * time.Second)
+	runtime.GC()
+	time.Sleep(200 * time.Millisecond)
+
+	goroutinesAfter := runtime.NumGoroutine()
+	leaked := goroutinesAfter - goroutinesBefore
+
+	t.Logf("goroutines: before=%d after=%d delta=%+d", goroutinesBefore, goroutinesAfter, leaked)
+
+	// The OTel SDK calls conn.Close() unconditionally in client.Shutdown,
+	// even when the context is expired. So gRPC goroutines should not leak.
+	// This threshold catches a real leak while tolerating normal variance.
+	if leaked > 5 {
+		t.Errorf("goroutine leak detected: %d goroutines accumulated over %d cycles with a hanging collector", leaked, cycles)
+	} else {
+		t.Log("No goroutine leak: the OTel SDK closes gRPC connections even with an expired context.")
+		t.Log("The confirmed bug is the error return, not a resource leak.")
+	}
 }
