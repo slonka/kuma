@@ -12,7 +12,6 @@ import (
 	api_common "github.com/kumahq/kuma/v2/api/openapi/types/common"
 	config_core "github.com/kumahq/kuma/v2/pkg/config/core"
 	"github.com/kumahq/kuma/v2/pkg/core/kri"
-	core_meta "github.com/kumahq/kuma/v2/pkg/core/metadata"
 	"github.com/kumahq/kuma/v2/pkg/core/naming"
 	"github.com/kumahq/kuma/v2/pkg/core/resources/access"
 	core_mesh "github.com/kumahq/kuma/v2/pkg/core/resources/apis/mesh"
@@ -98,21 +97,26 @@ func (dle *dataplaneLayoutEndpoint) getLayout(request *restful.Request, response
 			ProxyResourceName: naming.MustContextualInboundName(dataplane, inbound.GetSectionName()),
 		}
 	})
+
+	listeners := []api_common.DataplaneListener{}
 	for _, listener := range dataplane.Spec.GetNetworking().GetListeners() {
 		sectionName := listener.GetSectionName()
+		var listenerType api_common.DataplaneListenerType
 		var proxyResourceName string
 		switch listener.GetType() {
 		case v1alpha1.Dataplane_Networking_Listener_ZoneIngress:
+			listenerType = api_common.ZoneIngress
 			proxyResourceName = naming.ContextualZoneIngressListenerName(sectionName)
 		case v1alpha1.Dataplane_Networking_Listener_ZoneEgress:
+			listenerType = api_common.ZoneEgress
 			proxyResourceName = naming.ContextualZoneEgressListenerName(sectionName)
 		default:
 			continue
 		}
-		inbounds = append(inbounds, api_common.DataplaneInbound{
+		listeners = append(listeners, api_common.DataplaneListener{
 			Kri:               kri.WithSectionName(kri.From(dataplane), sectionName).String(),
+			Type:              listenerType,
 			Port:              int32(listener.GetPort()),
-			Protocol:          core_meta.ProtocolTCP.String(),
 			ProxyResourceName: proxyResourceName,
 		})
 	}
@@ -136,6 +140,7 @@ func (dle *dataplaneLayoutEndpoint) getLayout(request *restful.Request, response
 		Inbounds:  inbounds,
 		Kri:       kri.From(dataplane).String(),
 		Labels:    dataplane.GetMeta().GetLabels(),
+		Listeners: listeners,
 		Outbounds: outbounds,
 		SpiffeId:  dle.computeSpiffeID(request, meshName, dataplane),
 	}
