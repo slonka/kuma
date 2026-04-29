@@ -103,6 +103,16 @@ func StartHostSampler() {
 		// causes a single sample to be missed, not the whole stream to stall.
 		go pollLoop(ctx, filepath.Join(hostSamplerDir, "k3d-pressure.txt"),
 			hostSamplerInterval, sampleK3dPressure)
+
+		// Per-cgroup PSI for kubepods.slice. With CPU requests but no limits
+		// we never get cgroup throttling stats — cpu.stat's nr_throttled stays
+		// at 0 even when a container is starving on CFS shares. cpu.pressure
+		// records that starvation directly: "full avg10=N" is the % of wall
+		// time during which every task in the cgroup was waiting for CPU.
+		// This is the single-best signal for the "stuck behind everything
+		// else on a saturated host" failure mode.
+		go pollLoop(ctx, filepath.Join(hostSamplerDir, "k3d-kubepods-pressure.txt"),
+			hostSamplerInterval, sampleK3dKubepodsPressure)
 	})
 }
 
@@ -323,6 +333,69 @@ func sampleK3dPressure() string {
 		if err != nil {
 			// A timeout here is itself the signal we're after — record it
 			// instead of dropping the sample.
+			fmt.Fprintf(&b, "exec error: %v\n", err)
+		}
+		if len(out) > 0 {
+			b.Write(out)
+			if !strings.HasSuffix(string(out), "\n") {
+				b.WriteString("\n")
+			}
+		}
+	}
+	return b.String()
+}
+
+// sampleK3dKubepodsPressure walks every cpu.pressure file under
+// kubepods.slice inside each k3d node and emits its contents. With CPU
+// requests but no limits, throttling stats stay at zero even under heavy
+// contention; per-cgroup PSI is the only direct quantification of "this
+// container's tasks were stuck waiting for CPU." The "full avg10/avg60/avg300"
+// fields read as percentages of wall time during which every task in the
+// cgroup was waiting on CPU. Stable above ~5% indicates real starvation,
+// numbers approaching 100% indicate a fully blocked cgroup.
+//
+// Memory and IO pressure files are skipped to keep the sample size bounded —
+// host-pressure already captures system-wide memory/IO PSI, and the failure
+// mode under investigation is CPU. Add them back if the suspect changes.
+func sampleK3dKubepodsPressure() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	listOut, err := exec.CommandContext(ctx, "docker", "ps", "--filter", "name=k3d-",
+		"--filter", "status=running", "--format", "{{.Names}}").Output()
+	if err != nil {
+		return fmt.Sprintf("docker ps failed: %v", err)
+	}
+	// Inside each container: walk kubepods.slice; for every cpu.pressure,
+	// emit the cgroup path and its contents. Filter out cgroups whose
+	// "full" line is exactly zero — they have nothing interesting to say
+	// and dominate the file size on a quiet test. Cgroups under load
+	// (some/full > 0) and the kubepods slice itself are always included.
+	const script = `
+find /sys/fs/cgroup/kubepods.slice -name 'cpu.pressure' 2>/dev/null | while read f; do
+  contents=$(cat "$f" 2>/dev/null)
+  case "$f" in
+    */kubepods.slice/cpu.pressure) include=1 ;;
+    *) include=0 ;;
+  esac
+  case "$contents" in
+    *"full avg10=0.00"*"full avg60=0.00"*"full avg300=0.00"*"some avg10=0.00"*) ;;
+    *) include=1 ;;
+  esac
+  [ "$include" = "1" ] || continue
+  echo "=== $f ==="
+  echo "$contents"
+done
+`
+	var b strings.Builder
+	for _, name := range strings.Fields(string(listOut)) {
+		execCtx, execCancel := context.WithTimeout(context.Background(), 4*time.Second)
+		out, err := exec.CommandContext(execCtx, "docker", "exec", name, "sh", "-c", script).CombinedOutput()
+		execCancel()
+		fmt.Fprintf(&b, "--- %s ---\n", name)
+		if err != nil {
+			// Timeout here is the signal — the docker exec itself didn't
+			// return within 4s, suggesting either the container or docker
+			// daemon is overloaded.
 			fmt.Fprintf(&b, "exec error: %v\n", err)
 		}
 		if len(out) > 0 {
