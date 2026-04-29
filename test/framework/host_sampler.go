@@ -60,7 +60,7 @@ const HostSamplerBaselineDir = "build/host-samples-baseline"
 
 // hostSamplerInterval is the polling cadence for the in-process samplers
 // (docker stats, host PSI). vmstat/iostat self-pace at 1s. Picked so a 4-minute
-// freeze produces ~120 samples per signal — enough resolution to localise the
+// freeze produces ~120 samples per signal — enough resolution to localize the
 // edge of the gap.
 const hostSamplerInterval = 2 * time.Second
 
@@ -281,7 +281,7 @@ func sampleDockerStats() string {
 	}
 	// Filter to k3d-* lines to keep the file focused.
 	var keep []string
-	for _, line := range strings.Split(string(out), "\n") {
+	for line := range strings.SplitSeq(string(out), "\n") {
 		if strings.HasPrefix(line, "k3d-") {
 			keep = append(keep, line)
 		}
@@ -323,7 +323,7 @@ func sampleK3dPressure() string {
 		return fmt.Sprintf("docker ps failed: %v", err)
 	}
 	var b strings.Builder
-	for _, name := range strings.Fields(string(listOut)) {
+	for name := range strings.FieldsSeq(string(listOut)) {
 		execCtx, execCancel := context.WithTimeout(context.Background(), 3*time.Second)
 		out, err := exec.CommandContext(execCtx, "docker", "exec", name, "sh", "-c",
 			"cat /proc/pressure/cpu /proc/pressure/memory /proc/pressure/io /proc/loadavg /proc/stat 2>/dev/null | head -40",
@@ -387,7 +387,7 @@ find /sys/fs/cgroup/kubepods.slice -name 'cpu.pressure' 2>/dev/null | while read
 done
 `
 	var b strings.Builder
-	for _, name := range strings.Fields(string(listOut)) {
+	for name := range strings.FieldsSeq(string(listOut)) {
 		execCtx, execCancel := context.WithTimeout(context.Background(), 4*time.Second)
 		out, err := exec.CommandContext(execCtx, "docker", "exec", name, "sh", "-c", script).CombinedOutput()
 		execCancel()
