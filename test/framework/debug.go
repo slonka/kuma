@@ -170,6 +170,12 @@ func debugKube(cluster Cluster, mesh string, namespaces ...string) error {
 		}
 	}
 
+	// Out-of-band time-series samples taken on the test runner host. These
+	// keep recording even if the k3d node container is frozen, so any
+	// multi-minute gap in the in-container logs can be cross-referenced
+	// against the host's view of CPU%, PSI, and procs running.
+	DumpHostSamplesTo(cluster)
+
 	topNodes, err := k8s.RunKubectlAndGetOutputE(cluster.GetTesting(), &defaultKubeOptions, "top", "nodes")
 	if err != nil {
 		Logf("kubectl top nodes not available for cluster %q: %s", cluster.Name(), err)
@@ -378,6 +384,12 @@ find /sys/fs/cgroup/cpu,cpuacct/kubepods -name 'cpu.stat' 2>/dev/null \
 echo "=== cgroup v1 memory (kubepods) ==="
 find /sys/fs/cgroup/memory/kubepods -name 'memory.stat' -o -name 'memory.memsw.usage_in_bytes' 2>/dev/null \
   | while read f; do echo "--- $f ---"; cat "$f"; done
+echo "=== dmesg -T (last 200 lines) ==="
+dmesg -T 2>/dev/null | tail -200 || echo "dmesg unavailable"
+echo "=== oom / softlockup / hung_task in dmesg ==="
+dmesg -T 2>/dev/null | grep -iE 'oom|softlockup|hung_task|out of memory|killed process' || echo "none"
+echo "=== procs in D state ==="
+ps -eo pid,stat,wchan,cmd 2>/dev/null | awk '$2 ~ /D/' || true
 `
 	out, err := exec.CommandContext(ctx, "docker", "exec", containerName, "sh", "-c", script).CombinedOutput()
 	if err != nil {

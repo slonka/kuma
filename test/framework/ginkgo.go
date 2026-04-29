@@ -64,6 +64,17 @@ func E2EBeforeSuite(fn func()) bool {
 		}
 	})
 
+	// Per-spec markers in the host-sampler rolling files. Lets a successful
+	// run be sliced out by spec name and compared against the same spec on a
+	// failing run. Runs always — pass or fail.
+	ginkgo.JustBeforeEach(func() {
+		HostSamplerMark("BEFORE " + ginkgo.CurrentSpecReport().FullText())
+	})
+	ginkgo.JustAfterEach(func() {
+		HostSamplerMark("AFTER " + ginkgo.CurrentSpecReport().FullText() +
+			" state=" + ginkgo.CurrentSpecReport().State.String())
+	})
+
 	return ginkgo.BeforeSuite(func() {
 		fn()
 	})

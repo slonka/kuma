@@ -98,6 +98,7 @@ func defaultKubeConfigPath(clusterName string) string {
 }
 
 func NewK8sCluster(t testing.TestingT, clusterName string, verbose bool) *K8sCluster {
+	StartHostSampler()
 	return &K8sCluster{
 		t:                   t,
 		name:                clusterName,

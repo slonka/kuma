@@ -16,6 +16,12 @@ import (
 var (
 	BaseDir       = "results"
 	DumpOnSuccess = false
+	// PostDumpHook runs at the end of DumpReport, regardless of whether any
+	// spec failed. Used by the host-sampler to write a comparison baseline
+	// even on fully-green suites. Default nil = no-op. Kept here (rather
+	// than in the framework package) to avoid an import cycle: framework
+	// already imports this package, so it can populate the hook from init().
+	PostDumpHook func(report ginkgo.Report)
 )
 
 func stagingDir() string {
@@ -124,6 +130,9 @@ func DumpReport(report ginkgo.Report) {
 	}
 	if err := os.RemoveAll(stagingDir()); err != nil {
 		logf("[WARNING]: failed to remove staging directory %q: %v", stagingDir(), err)
+	}
+	if PostDumpHook != nil {
+		PostDumpHook(report)
 	}
 	logf("saved report to %q", basePath)
 }
