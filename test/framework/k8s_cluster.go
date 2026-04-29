@@ -62,6 +62,7 @@ type K8sCluster struct {
 	opts                kumaDeploymentOptions
 	portForwards        map[portforward.Spec]portforward.Tunnel
 	adminTunnels        map[portforward.Spec]envoy_admin.Tunnel
+	tunnelMu            sync.Mutex
 }
 
 var _ Cluster = &K8sCluster{}
@@ -97,6 +98,7 @@ func defaultKubeConfigPath(clusterName string) string {
 }
 
 func NewK8sCluster(t testing.TestingT, clusterName string, verbose bool) *K8sCluster {
+	StartHostSampler()
 	return &K8sCluster{
 		t:                   t,
 		name:                clusterName,
@@ -149,7 +151,9 @@ func (c *K8sCluster) PortForwardApp(spec portforward.Spec) (portforward.Tunnel, 
 		)
 	}
 
+	c.tunnelMu.Lock()
 	c.portForwards[spec] = fwd
+	c.tunnelMu.Unlock()
 
 	return fwd, nil
 }
@@ -560,6 +564,12 @@ func (c *K8sCluster) genValues(mode string) map[string]string {
 		"controlPlane.defaults.skipMeshCreation": strconv.FormatBool(c.opts.skipDefaultMesh),
 		"ingress.resources.limits.cpu":           "null",
 		"egress.resources.limits.cpu":            "null",
+		// Bumped well above the production defaults (20m / 50m) so kuma-init,
+		// kuma-validator, and kuma-sidecar aren't CPU-starved when the CI runner
+		// launches multiple injected pods concurrently on a shared-vCPU host.
+		"dataPlane.initContainer.resources.requests.cpu":       "100m",
+		"dataPlane.validationContainer.resources.requests.cpu": "100m",
+		"dataPlane.sidecarContainer.resources.requests.cpu":    "100m",
 	}
 	if Config.KumaImageRegistry != "" {
 		values["global.image.registry"] = Config.KumaImageRegistry
@@ -1600,9 +1610,12 @@ func (c *K8sCluster) GetOrCreateAdminTunnel(args portforward.Spec) (envoy_admin.
 		return nil, errors.Wrap(err, "invalid port-forward spec")
 	}
 
+	c.tunnelMu.Lock()
 	if tnl := c.adminTunnels[args]; tnl != nil {
+		c.tunnelMu.Unlock()
 		return tnl, nil
 	}
+	c.tunnelMu.Unlock()
 
 	fwd, err := c.PortForwardApp(args)
 	if err != nil {
@@ -1626,7 +1639,9 @@ func (c *K8sCluster) GetOrCreateAdminTunnel(args portforward.Spec) (envoy_admin.
 		)
 	}
 
+	c.tunnelMu.Lock()
 	c.adminTunnels[args] = tnl
+	c.tunnelMu.Unlock()
 
 	return tnl, nil
 }
