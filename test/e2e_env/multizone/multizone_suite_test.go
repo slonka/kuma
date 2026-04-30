@@ -95,4 +95,5 @@ var (
 	_ = Describe("MeshIdentity Migration", meshidentity.Migration, Ordered)
 	_ = Describe("CNI Configuration", Label("kind-not-supported"), cni.ExcludeOutboundPort, Ordered)
 	_ = Describe("MeshProxy", meshproxy.Connectivity, Ordered)
+	_ = Describe("MeshProxy Migration", meshproxy.Migration, Ordered)
 )
