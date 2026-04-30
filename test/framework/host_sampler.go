@@ -113,6 +113,18 @@ func StartHostSampler() {
 		// else on a saturated host" failure mode.
 		go pollLoop(ctx, filepath.Join(hostSamplerDir, "k3d-kubepods-pressure.txt"),
 			hostSamplerInterval, sampleK3dKubepodsPressure)
+
+		// Top-CPU processes on the host. The aggregate samplers (vmstat,
+		// host PSI, docker stats) prove that CPU is saturated during a
+		// freeze, but they don't say which process is consuming the cycles.
+		// Per-process attribution is the missing piece for picking out the
+		// "bloater" - the process whose periodic spike crowds out everyone
+		// else's CFS share. Container processes appear in host ps output
+		// (docker uses namespaces, not VMs), so one host-level sampler
+		// captures k3s, kubelet, calico-node, calico-typha, felix, kuma-cp,
+		// kuma-init etc. - distinguishable via the cgroup column.
+		go pollLoop(ctx, filepath.Join(hostSamplerDir, "top-procs.txt"),
+			hostSamplerInterval, sampleTopProcesses)
 	})
 }
 
@@ -406,4 +418,34 @@ done
 		}
 	}
 	return b.String()
+}
+
+// sampleTopProcesses captures the top 30 processes by CPU on the host.
+// pcpu is the % of one CPU averaged over the process's lifetime - imperfect
+// for spike-detection but good enough at 2s sample cadence to spot a
+// process that recently burst (its lifetime average jumps when a long-lived
+// process starts a heavy phase). The cgroup column attributes each row to
+// the docker container or systemd slice that owns it; cross-referencing
+// against docker-stats.tsv pinpoints the responsible container, and against
+// the comm/args column pinpoints the binary inside.
+//
+// We deliberately do not use `top -b -n1` because it spends ~1s computing
+// instantaneous CPU% and would hold the goroutine for that long; ps is
+// near-instant and writes the same data we need.
+func sampleTopProcesses() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "ps",
+		"-eo", "pid,ppid,pcpu,pmem,rss,etime,stat,cgroup,comm,args",
+		"--sort=-pcpu", "--no-headers",
+	).Output()
+	if err != nil {
+		return fmt.Sprintf("ps failed: %v", err)
+	}
+	const keepN = 30
+	lines := strings.Split(string(out), "\n")
+	if len(lines) > keepN {
+		lines = lines[:keepN]
+	}
+	return strings.Join(lines, "\n")
 }
