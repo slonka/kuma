@@ -51,6 +51,150 @@ func Migration() {
 		},
 	}
 
+	expectCrossZoneTraffic := func(g Gomega, tc meshCase) {
+		GinkgoHelper()
+
+		response, err := client.CollectEchoResponse(
+			multizone.KubeZone1,
+			tc.zone1Client,
+			fmt.Sprintf("http://%s.%s.svc.%s.mesh.local:80", tc.zone2Server, namespace, multizone.KubeZone2.ZoneName()),
+			client.FromKubernetesPod(namespace, tc.zone1Client),
+		)
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(response.Instance).To(Equal(tc.zone2Instance))
+	}
+
+	assertAllMeshesReachable := func() {
+		GinkgoHelper()
+
+		for _, tc := range meshes {
+			tc := tc
+			Eventually(func(g Gomega) {
+				expectCrossZoneTraffic(g, tc)
+			}, "60s", "1s").MustPassRepeatedly(3).Should(Succeed())
+		}
+	}
+
+	deployMeshScopedZoneProxies := func(mesh string) {
+		GinkgoHelper()
+
+		const ingressPort = uint32(11001)
+		const egressPort = uint32(11002)
+
+		proxyName := fmt.Sprintf("mesh-zone-proxy-%s", mesh)
+		group := errgroup.Group{}
+		NewClusterSetup().
+			Install(zoneproxy.Install(
+				zoneproxy.WithName(proxyName),
+				zoneproxy.WithNamespace(namespace),
+				zoneproxy.WithMesh(mesh),
+				zoneproxy.WithIngressPort(ingressPort),
+				zoneproxy.WithEgressPort(egressPort),
+			)).
+			SetupInGroup(multizone.KubeZone1, &group)
+		NewClusterSetup().
+			Install(zoneproxy.Install(
+				zoneproxy.WithName(proxyName),
+				zoneproxy.WithNamespace(namespace),
+				zoneproxy.WithMesh(mesh),
+				zoneproxy.WithIngressPort(ingressPort),
+				zoneproxy.WithEgressPort(egressPort),
+			)).
+			SetupInGroup(multizone.KubeZone2, &group)
+		Expect(group.Wait()).To(Succeed())
+	}
+
+	readUpstreamRequests := func(cluster *K8sCluster, app, mesh string) float64 {
+		GinkgoHelper()
+
+		stats, err := cluster.GetEnvoyAdminTunnel(app, namespace).
+			GetStats(fmt.Sprintf(".*%s.*upstream_rq_total", mesh))
+		Expect(err).ToNot(HaveOccurred())
+
+		total := 0.0
+		for _, item := range stats.Stats {
+			if !strings.Contains(item.Name, "upstream_rq_total") {
+				continue
+			}
+			value, ok := item.Value.(float64)
+			if !ok {
+				continue
+			}
+			total += value
+		}
+		return total
+	}
+
+	// assertMeshScopedProxiesUsed verifies that the destination zone's new
+	// mesh-scoped ingress receives at least some cross-zone requests once
+	// it is deployed. The mesh in this test does not enable zone egress,
+	// so the source-side egress is bypassed - traffic goes sidecar ->
+	// remote zone ingress directly. Both legacy and mesh-scoped ingresses
+	// can coexist; the success criterion for the migration is that the
+	// new mesh-scoped ingress is reachable and is observed routing
+	// traffic to the local backend.
+	assertMeshScopedProxiesUsed := func(tc meshCase) {
+		GinkgoHelper()
+
+		ingressApp := fmt.Sprintf("mesh-zone-proxy-%s-ingress", tc.mesh)
+
+		Eventually(func(g Gomega) {
+			expectCrossZoneTraffic(g, tc)
+			g.Expect(readUpstreamRequests(multizone.KubeZone2, ingressApp, tc.mesh)).To(BeNumerically(">", 0))
+		}, "60s", "1s").Should(Succeed())
+	}
+
+	// runDuringMigration runs `do` while a background goroutine per mesh
+	// continuously sends cross-zone requests. After `do` returns, it
+	// asserts no request error was observed during a short drain window.
+	runDuringMigration := func(do func()) {
+		GinkgoHelper()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		var (
+			mu       sync.Mutex
+			firstErr error
+		)
+		for _, tc := range meshes {
+			tc := tc
+			go func() {
+				defer GinkgoRecover()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					default:
+					}
+					_, err := client.CollectEchoResponse(
+						multizone.KubeZone1,
+						tc.zone1Client,
+						fmt.Sprintf("http://%s.%s.svc.%s.mesh.local:80",
+							tc.zone2Server, namespace, multizone.KubeZone2.ZoneName()),
+						client.FromKubernetesPod(namespace, tc.zone1Client),
+					)
+					if err != nil {
+						mu.Lock()
+						if firstErr == nil {
+							firstErr = err
+						}
+						mu.Unlock()
+					}
+					time.Sleep(200 * time.Millisecond)
+				}
+			}()
+		}
+
+		do()
+
+		Consistently(func(g Gomega) {
+			mu.Lock()
+			defer mu.Unlock()
+			g.Expect(firstErr).ToNot(HaveOccurred())
+		}, "10s", "500ms").Should(Succeed())
+	}
+
 	setupMeshIdentity := func(meshName string) {
 		GinkgoHelper()
 
@@ -197,170 +341,16 @@ spec:
 	})
 
 	It("should migrate traffic to mesh-scoped zone proxies without request drops for two meshes", func() {
-		expectRequest := func(g Gomega, source *K8sCluster, sourceClient, targetServer, targetZone, expectedInstance string) {
-			GinkgoHelper()
-
-			response, err := client.CollectEchoResponse(
-				source,
-				sourceClient,
-				fmt.Sprintf("http://%s.%s.svc.%s.mesh.local:80", targetServer, namespace, targetZone),
-				client.FromKubernetesPod(namespace, sourceClient),
-			)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(response.Instance).To(Equal(expectedInstance))
-		}
-
-		expectCrossZoneTraffic := func(g Gomega, tc meshCase) {
-			GinkgoHelper()
-
-			expectRequest(g, multizone.KubeZone1, tc.zone1Client, tc.zone2Server, multizone.KubeZone2.ZoneName(), tc.zone2Instance)
-		}
-
-		assertAllMeshesReachable := func() {
-			GinkgoHelper()
-
-			for _, tc := range meshes {
-				tc := tc
-				Eventually(func(g Gomega) {
-					expectCrossZoneTraffic(g, tc)
-				}, "60s", "1s").MustPassRepeatedly(3).Should(Succeed())
-			}
-		}
-
-		deployMeshScopedZoneProxies := func(mesh string) {
-			GinkgoHelper()
-
-			const ingressPort = uint32(11001)
-			const egressPort = uint32(11002)
-
-			proxyName := fmt.Sprintf("mesh-zone-proxy-%s", mesh)
-			group := errgroup.Group{}
-			NewClusterSetup().
-				Install(zoneproxy.Install(
-					zoneproxy.WithName(proxyName),
-					zoneproxy.WithNamespace(namespace),
-					zoneproxy.WithMesh(mesh),
-					zoneproxy.WithIngressPort(ingressPort),
-					zoneproxy.WithEgressPort(egressPort),
-				)).
-				SetupInGroup(multizone.KubeZone1, &group)
-			NewClusterSetup().
-				Install(zoneproxy.Install(
-					zoneproxy.WithName(proxyName),
-					zoneproxy.WithNamespace(namespace),
-					zoneproxy.WithMesh(mesh),
-					zoneproxy.WithIngressPort(ingressPort),
-					zoneproxy.WithEgressPort(egressPort),
-				)).
-				SetupInGroup(multizone.KubeZone2, &group)
-			Expect(group.Wait()).To(Succeed())
-		}
-
-		readUpstreamRequests := func(cluster *K8sCluster, app, mesh string) float64 {
-			GinkgoHelper()
-
-			stats, err := cluster.GetEnvoyAdminTunnel(app, namespace).
-				GetStats(fmt.Sprintf(".*%s.*upstream_rq_total", mesh))
-			Expect(err).ToNot(HaveOccurred())
-
-			total := 0.0
-			for _, item := range stats.Stats {
-				if !strings.Contains(item.Name, "upstream_rq_total") {
-					continue
-				}
-				value, ok := item.Value.(float64)
-				if !ok {
-					continue
-				}
-				total += value
-			}
-			return total
-		}
-
-		assertMeshScopedProxiesUsed := func(tc meshCase) {
-			GinkgoHelper()
-
-			// The mesh in this test does not enable zone egress, so the
-			// source-side egress is bypassed - traffic goes sidecar -> remote
-			// zone ingress directly. Only verify that the destination zone's
-			// new mesh-scoped ingress receives at least some cross-zone
-			// requests once it is deployed. Both legacy and mesh-scoped
-			// ingresses can coexist; the success criterion for the migration
-			// is that the new mesh-scoped ingress is reachable and is
-			// observed routing traffic to the local backend.
-			ingressApp := fmt.Sprintf("mesh-zone-proxy-%s-ingress", tc.mesh)
-
-			Eventually(func(g Gomega) {
-				_, err := client.CollectEchoResponse(
-					multizone.KubeZone1,
-					tc.zone1Client,
-					fmt.Sprintf("http://%s.%s.svc.%s.mesh.local:80", tc.zone2Server, namespace, multizone.KubeZone2.ZoneName()),
-					client.FromKubernetesPod(namespace, tc.zone1Client),
-				)
-				g.Expect(err).ToNot(HaveOccurred())
-
-				g.Expect(readUpstreamRequests(multizone.KubeZone2, ingressApp, tc.mesh)).To(BeNumerically(">", 0))
-			}, "60s", "1s").Should(Succeed())
-		}
-
 		assertAllMeshesReachable()
 
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
+		runDuringMigration(func() {
+			deployMeshScopedZoneProxies(meshes[0].mesh)
+			assertAllMeshesReachable()
+			assertMeshScopedProxiesUsed(meshes[0])
 
-		var (
-			reqErrMu sync.Mutex
-			reqErr   error
-		)
-		recordRequestError := func(err error) {
-			GinkgoHelper()
-
-			if err == nil {
-				return
-			}
-			reqErrMu.Lock()
-			defer reqErrMu.Unlock()
-			if reqErr == nil {
-				reqErr = err
-			}
-		}
-		for _, tc := range meshes {
-			tc := tc
-			go func() {
-				defer GinkgoRecover()
-
-				for {
-					select {
-					case <-ctx.Done():
-						return
-					default:
-					}
-
-					_, err := client.CollectEchoResponse(
-						multizone.KubeZone1,
-						tc.zone1Client,
-						fmt.Sprintf("http://%s.%s.svc.%s.mesh.local:80", tc.zone2Server, namespace, multizone.KubeZone2.ZoneName()),
-						client.FromKubernetesPod(namespace, tc.zone1Client),
-					)
-					recordRequestError(err)
-
-					time.Sleep(200 * time.Millisecond)
-				}
-			}()
-		}
-
-		deployMeshScopedZoneProxies(meshes[0].mesh)
-		assertAllMeshesReachable()
-		assertMeshScopedProxiesUsed(meshes[0])
-
-		deployMeshScopedZoneProxies(meshes[1].mesh)
-		assertAllMeshesReachable()
-		assertMeshScopedProxiesUsed(meshes[1])
-
-		Consistently(func(g Gomega) {
-			reqErrMu.Lock()
-			defer reqErrMu.Unlock()
-			g.Expect(reqErr).ToNot(HaveOccurred())
-		}, "10s", "500ms").Should(Succeed())
+			deployMeshScopedZoneProxies(meshes[1].mesh)
+			assertAllMeshesReachable()
+			assertMeshScopedProxiesUsed(meshes[1])
+		})
 	})
 }
