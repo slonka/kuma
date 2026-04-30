@@ -28,55 +28,92 @@ func stagingDir() string {
 	return path.Join(BaseDir, "..", "kuma-test-staging")
 }
 
-// AddFileToReportEntry adds a file to the report. The file will be copied to the report directory.
-// It's an alternative to ginkgo.AddReportEntry so that not all logs are kept in memory.
+// AddFileToReportEntry adds a file to the report.
+//
+// When called from a spec context (BeforeEach/It/AfterEach/etc.), the file is
+// written directly to its final per-spec location under BaseDir so the bundle
+// is usable even if the test process is killed before DumpReport runs - which
+// is the common case on a job-level timeout-cancellation in CI. Suite-level
+// callers (BeforeSuite/AfterSuite) fall back to staging because their spec
+// context isn't known yet; DumpReport later moves them into place.
+//
+// The Ginkgo report entry is still registered so that DumpReport can write
+// `combined.log`/`report.txt` per spec; for already-eager files the writeEntry
+// path becomes a no-op rename (src == dst).
 func AddFileToReportEntry(name string, content any) {
+	outPath, err := pickReportPath(name)
+	if err != nil {
+		logf("[WARNING]: %v", err)
+		return
+	}
+	if err := writeReportContent(outPath, content); err != nil {
+		logf("[WARNING]: %v", err)
+		return
+	}
+	ginkgo.AddReportEntry(name, outPath, ginkgo.ReportEntryVisibilityNever)
+}
+
+func pickReportPath(name string) (string, error) {
+	specReport := ginkgo.CurrentSpecReport()
+	if specReport.FullText() != "" {
+		// Eager path: write directly to the final per-spec dir. This
+		// matches the layout DumpReport produces, so the writeEntry no-op
+		// rename later is safe and idempotent.
+		specDir := filepath.Join(BaseDir, files.ToValidUnixFilename(specReport.FullText()))
+		if err := os.MkdirAll(specDir, 0o755); err != nil {
+			return "", fmt.Errorf("could not create spec dir %s: %w", specDir, err)
+		}
+		return filepath.Join(specDir, files.ToValidUnixFilename(name)), nil
+	}
+	// Suite-level call: spec is not yet known. Stage and let DumpReport
+	// move it once it can attribute the entry to its spec.
 	base := stagingDir()
 	if err := os.MkdirAll(base, 0o755); err != nil {
-		logf("[WARNING]: Error creating staging directory %s: %v", base, err)
+		return "", fmt.Errorf("could not create staging dir %s: %w", base, err)
 	}
 	tmp, err := os.CreateTemp(base, "report-*")
 	if err != nil {
-		logf("[WARNING]: could not create temporary report %v", err)
-		return
+		return "", fmt.Errorf("could not create temp file: %w", err)
 	}
-	defer tmp.Close()
+	if err := tmp.Close(); err != nil {
+		return "", fmt.Errorf("could not close temp file %s: %w", tmp.Name(), err)
+	}
+	return tmp.Name(), nil
+}
 
-	fName := tmp.Name()
+func writeReportContent(outPath string, content any) error {
 	switch c := content.(type) {
 	case string:
 		if files.FileExists(c) {
-			// In this case we passed a file not the content
-			fName = c
-		} else {
-			_, err = tmp.WriteString(c)
+			// Caller passed an existing file path. Copy into the bundle
+			// so the bundle is self-contained even if the source file is
+			// later cleaned up (e.g., session temp file on test exit).
+			return files.CopyFile(c, outPath)
 		}
+		return os.WriteFile(outPath, []byte(c), 0o600)
 	case []byte:
-		_, err = tmp.Write(c)
+		return os.WriteFile(outPath, c, 0o600)
 	default:
-		_, err = fmt.Fprintf(tmp, "%v", c)
+		return os.WriteFile(outPath, fmt.Appendf(nil, "%v", content), 0o600)
 	}
-	if err != nil {
-		logf("[WARNING]: could not write to temporary report %v", err)
-		return
-	}
-	ginkgo.AddReportEntry(name, fName, ginkgo.ReportEntryVisibilityNever)
 }
 
 // DumpReport dumps the report to the disk.
+//
+// With AddFileToReportEntry now writing eagerly into BaseDir/<spec>/, the
+// per-entry writeEntry calls below become idempotent no-op renames for
+// already-on-disk files. DumpReport's remaining job is to (a) write the
+// per-spec metadata files (combined.log, report.txt) which depend on the
+// spec's final state, and (b) flush any staged entries from suite-level
+// callers into their final location once the failed spec is known.
+//
+// The previous "rename BaseDir to tmpDir to clear stale state" preamble has
+// been dropped because it would discard the eagerly-written per-spec files
+// that already accumulated during the suite. CI starts from a fresh
+// checkout; local users should `rm -rf build/reports/e2e-debug` themselves.
 func DumpReport(report ginkgo.Report) {
 	ginkgo.GinkgoHelper()
 	basePath := BaseDir
-	if files.FileExists(basePath) {
-		tmpDir := path.Join(os.TempDir(), fmt.Sprintf("kuma-%04d", ginkgo.GinkgoRandomSeed()))
-		logf("Report already exists in %q, moving to tmpDir: %q", basePath, tmpDir)
-		if err := os.Rename(BaseDir, tmpDir); err != nil {
-			logf("[WARNING]: failed to move %q to %q deleting it! %v", basePath, tmpDir, err)
-			if err := os.RemoveAll(basePath); err != nil {
-				logf("[WARNING]: failed to remove %q %v", basePath, err)
-			}
-		}
-	}
 	logf("saving report to %q DumpOnSuccess: %v", basePath, DumpOnSuccess)
 	writeEntry := func(path string, data string) {
 		err := os.MkdirAll(filepath.Dir(path), 0o755)
