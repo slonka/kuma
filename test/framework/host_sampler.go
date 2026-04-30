@@ -20,8 +20,21 @@ func init() {
 	// Register the suite-end baseline dumper. Runs whether or not any spec
 	// failed — that's the whole point: a successful run still produces a
 	// host-samples directory you can diff against a failing run.
+	//
+	// After dumping, cancel the sampler context. Without this the long-lived
+	// vmstat/iostat subprocesses spawned by runLongLived stay alive after
+	// the Go test binary exits — they get reparented to PID 1 but remain in
+	// the bash step's process group, which is what `actions/runner` waits
+	// on before considering the step finished. Result: the step hangs for
+	// the full job-level timeout (60 minutes) on every passing run before
+	// the job is finally cancelled. Cancelling the context invokes
+	// exec.Cmd.Cancel (default Process.Kill), the subprocesses exit, and
+	// the bash step finishes cleanly.
 	report.PostDumpHook = func(r ginkgo.Report) {
 		DumpHostSamplesBaseline(r.SuiteDescription)
+		if hostSamplerCancel != nil {
+			hostSamplerCancel()
+		}
 	}
 }
 
