@@ -560,6 +560,17 @@ func (c *K8sCluster) genValues(mode string) map[string]string {
 		"controlPlane.defaults.skipMeshCreation": strconv.FormatBool(c.opts.skipDefaultMesh),
 		"ingress.resources.limits.cpu":           "null",
 		"egress.resources.limits.cpu":            "null",
+		// Raised from the production defaults (20m / 50m) so kuma-init,
+		// kuma-validator, and kuma-sidecar receive enough CFS share to
+		// finish their iptables / Go runtime startup within the readiness
+		// budget when the CI runner is already saturated by accumulated
+		// load (multiple k3s servers + multiple kuma-cps + Calico stack
+		// on a 4-vCPU host). Without limits, requests act only as the
+		// scheduler's CPU share weight, so this also avoids quota
+		// throttling stats staying at zero while the container starves.
+		"dataPlane.initContainer.resources.requests.cpu":       "100m",
+		"dataPlane.validationContainer.resources.requests.cpu": "100m",
+		"dataPlane.sidecarContainer.resources.requests.cpu":    "100m",
 	}
 	if Config.KumaImageRegistry != "" {
 		values["global.image.registry"] = Config.KumaImageRegistry
