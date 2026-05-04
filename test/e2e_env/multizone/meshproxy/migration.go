@@ -68,7 +68,6 @@ func Migration() {
 		GinkgoHelper()
 
 		for _, tc := range meshes {
-			tc := tc
 			Eventually(func(g Gomega) {
 				expectCrossZoneTraffic(g, tc)
 			}, "60s", "1s").MustPassRepeatedly(3).Should(Succeed())
@@ -158,7 +157,6 @@ func Migration() {
 			firstErr error
 		)
 		for _, tc := range meshes {
-			tc := tc
 			go func() {
 				defer GinkgoRecover()
 				for {
