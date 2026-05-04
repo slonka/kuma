@@ -120,24 +120,24 @@ endif
 # Linux + CI only: /dev/shm specifics differ on Docker Desktop, and developers
 # benefit less from this since their disks aren't on shared GH runners.
 # Deferred (=) so $(CLUSTER_NAME) resolves per-target at recipe time.
-K3D_KINE_TMPFS_DIR       = /dev/shm/k3d-$(CLUSTER_NAME)-kine
-K3D_VARLOG_TMPFS_DIR     = /dev/shm/k3d-$(CLUSTER_NAME)-varlog
-K3D_CONTAINERD_TMPFS_DIR = /dev/shm/k3d-$(CLUSTER_NAME)-containerd
+K3D_KINE_TMPFS_DIR   = /dev/shm/k3d-$(CLUSTER_NAME)-kine
+K3D_VARLOG_TMPFS_DIR = /dev/shm/k3d-$(CLUSTER_NAME)-varlog
 ifeq ($(GOOS),linux)
 ifeq ($(CI),true)
 K3D_CLUSTER_CREATE_OPTS += --volume "$(K3D_KINE_TMPFS_DIR):/var/lib/rancher/k3s/server/db@server:0"
-# /var/log inside the k3d container is the largest single writer category
-# observed in cgroup-v2 io.stat: kubelet writes pod stdout/stderr to
-# /var/log/pods/<pod>/<container>.log for every container in the cluster
+# /var/log inside the k3d container is the largest *attributable* writer
+# category observed in cgroup-v2 io.stat: kubelet writes pod stdout/stderr
+# to /var/log/pods/<pod>/<container>.log for every container in the cluster
 # (kuma-cp, calico-typha, felix, kuma-init streams). The k3d-server-0
 # container's blkio scope was 1.5-2.5 GB per suite across the matrix,
 # dwarfing journald, kine and dockerd's own writes. Tmpfs-back it.
 K3D_CLUSTER_CREATE_OPTS += --volume "$(K3D_VARLOG_TMPFS_DIR):/var/log@server:0"
-# /var/lib/containerd holds image layers (overlayfs snapshots) and
-# container task state. Image unpack writes go here when images are
-# imported via `k3d image import` and when containers start. Second-largest
-# write contributor inside the k3d container after pod logs.
-K3D_CLUSTER_CREATE_OPTS += --volume "$(K3D_CONTAINERD_TMPFS_DIR):/var/lib/containerd@server:0"
+# Note: an earlier revision also tmpfs'd /var/lib/containerd. That filled
+# /dev/shm to capacity on multizone runs (2 clusters x ~2 GB image layers
+# unpacked into containerd snapshots, plus the other tmpfs mounts here),
+# which corrupted kine's SQLite mid-transaction and surfaced as
+# "rpc error: no such table: kine" from the apiserver after ~10 minutes.
+# Image layers stay on disk; the win from /var/log alone is enough.
 endif
 endif
 
@@ -316,7 +316,7 @@ K3D_CREATE_CLUSTER ?= $(KUMA_DIR)/mk/resources/k3d-create-cluster.sh
 .PHONY: k3d/cluster/create
 k3d/cluster/create: $(KUBECONFIG_DIR)
 ifeq ($(GOOS)$(CI),linuxtrue)
-	$(Q)mkdir -p "$(K3D_KINE_TMPFS_DIR)" "$(K3D_VARLOG_TMPFS_DIR)" "$(K3D_CONTAINERD_TMPFS_DIR)"
+	$(Q)mkdir -p "$(K3D_KINE_TMPFS_DIR)" "$(K3D_VARLOG_TMPFS_DIR)"
 endif
 	$(Q)$(K3D_CREATE_CLUSTER) \
 	  "$(DOCKER_NETWORK)" \
@@ -334,7 +334,7 @@ ifeq ($(GOOS)$(CI),linuxtrue)
 	@# them. sudo is available passwordless on GH-hosted runners (and we use
 	@# it elsewhere - free-disk-space, sysctl, journald restart). Trailing
 	@# `|| true` keeps cleanup failures from masking real test results.
-	$(Q)sudo rm -rf "$(K3D_KINE_TMPFS_DIR)" "$(K3D_VARLOG_TMPFS_DIR)" "$(K3D_CONTAINERD_TMPFS_DIR)" || true
+	$(Q)sudo rm -rf "$(K3D_KINE_TMPFS_DIR)" "$(K3D_VARLOG_TMPFS_DIR)" || true
 endif
 
 # Orchestrated via sequential $(MAKE) calls to guarantee ordering under -j.
