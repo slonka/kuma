@@ -197,6 +197,25 @@ func StartHostSampler() {
 		// conntrack_max exhaustion is a known calico failure mode.
 		go pollLoop(ctx, filepath.Join(hostSamplerDir, "net-counters.txt"),
 			hostSamplerInterval, sampleNetCounters)
+
+		// Per-cgroup io.stat from cgroup-v2. docker stats's BlockIO
+		// counter sums to a fraction of /proc/diskstats's total writes
+		// (observed: 25 MB across all k3d containers vs sda1 bursts of
+		// 40 MB in single 2-second windows), so the bulk of disk pressure
+		// is attributed to other slices - dockerd/containerd metadata,
+		// systemd-journald, kernel writeback. cgroup-v2 io.stat per slice
+		// gives the actual per-cgroup byte/IO counters that docker stats
+		// elides.
+		go pollLoop(ctx, filepath.Join(hostSamplerDir, "cgroup-io.txt"),
+			hostSamplerInterval, sampleCgroupIOStat)
+
+		// Per-PID /proc/<pid>/io. read_bytes / write_bytes attribute the
+		// disk traffic in /proc/diskstats back to specific processes -
+		// kine inside k3s, dockerd, journald, helm.test, kumactl. Top-N
+		// by write_bytes delta tells us who is fsyncing the disk into
+		// the ground when IO PSI spikes.
+		go pollLoop(ctx, filepath.Join(hostSamplerDir, "proc-io.txt"),
+			hostSamplerInterval, sampleProcIO)
 	})
 }
 
@@ -811,6 +830,144 @@ func sampleNetCounters() string {
 	}
 	if data, err := os.ReadFile("/proc/net/sockstat"); err == nil {
 		fmt.Fprintf(&b, "--- /proc/net/sockstat ---\n%s", string(data))
+	}
+	return b.String()
+}
+
+// sampleCgroupIOStat walks the cgroup-v2 hierarchy one level deep and
+// emits the io.stat file for each top-level slice plus every direct
+// docker/containerd scope under system.slice. Format per cgroup-v2 docs:
+//
+//	<major>:<minor> rbytes=N wbytes=N rios=N wios=N dbytes=N dios=N
+//
+// One line per device per cgroup. Counters are cumulative; deltas
+// between samples convert to bytes/sec per cgroup. This is the missing
+// piece for "the disk is busy but docker stats says only 25 MB total" -
+// kernel-side writes (jbd2, kworker writeback) charge to root io.stat,
+// dockerd/containerd to system.slice, kine inside the k3d container to
+// /system.slice/docker-<id>.scope.
+//
+// Bounded enumeration: walk depth 2 from /sys/fs/cgroup, skipping
+// nested kubepods because they're already covered by the per-pod
+// kubepods cpu.pressure sampler. Final file is large but bounded -
+// most cgroups have one line per active device.
+func sampleCgroupIOStat() string {
+	var b strings.Builder
+	const root = "/sys/fs/cgroup"
+	emit := func(path string) {
+		ioPath := filepath.Join(path, "io.stat")
+		data, err := os.ReadFile(ioPath)
+		if err != nil || len(data) == 0 {
+			return
+		}
+		fmt.Fprintf(&b, "=== %s ===\n%s", ioPath, string(data))
+		if !strings.HasSuffix(string(data), "\n") {
+			b.WriteString("\n")
+		}
+	}
+	// Root + first-level slices.
+	emit(root)
+	if entries, err := os.ReadDir(root); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			emit(filepath.Join(root, e.Name()))
+			// Drill one more level into system.slice and docker
+			// containers, which is where the real attribution lives.
+			if e.Name() == "system.slice" || e.Name() == "user.slice" {
+				sub := filepath.Join(root, e.Name())
+				if subs, err := os.ReadDir(sub); err == nil {
+					for _, se := range subs {
+						if !se.IsDir() {
+							continue
+						}
+						// Skip kubepods - covered by k3d-kubepods-pressure.
+						if strings.Contains(se.Name(), "kubepods") {
+							continue
+						}
+						emit(filepath.Join(sub, se.Name()))
+					}
+				}
+			}
+		}
+	}
+	return b.String()
+}
+
+// sampleProcIO reads /proc/<pid>/io for every process and keeps the
+// top-30 by write_bytes (cumulative). Fields per kernel docs:
+//
+//	rchar / wchar              - bytes the process tried to read/write
+//	syscr / syscw              - read/write syscalls issued
+//	read_bytes / write_bytes   - bytes that hit the storage layer
+//	cancelled_write_bytes      - bytes from truncated/unlinked dirty pages
+//
+// write_bytes is the most useful for "who is fsync-storming the disk".
+// rchar - read_bytes >> 0 means the process is page-cache-friendly;
+// roughly equal means it's hitting the disk on every read. Cumulative
+// counters; downstream consumer computes deltas.
+//
+// /proc/<pid>/io requires either being the process owner or having
+// CAP_SYS_PTRACE. CI runs as root so we get everything; on a developer
+// machine without root we'll silently get fewer rows.
+func sampleProcIO() string {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return fmt.Sprintf("read /proc failed: %v", err)
+	}
+	type rec struct {
+		pid, comm, body string
+		writeBytes      int64
+	}
+	var rows []rec
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		pid := e.Name()
+		if pid == "" || pid[0] < '0' || pid[0] > '9' {
+			continue
+		}
+		data, err := os.ReadFile("/proc/" + pid + "/io")
+		if err != nil || len(data) == 0 {
+			continue
+		}
+		var wb int64
+		for line := range strings.SplitSeq(string(data), "\n") {
+			if v, ok := strings.CutPrefix(line, "write_bytes: "); ok {
+				_, _ = fmt.Sscanf(v, "%d", &wb)
+				break
+			}
+		}
+		comm := ""
+		if c, err := os.ReadFile("/proc/" + pid + "/comm"); err == nil {
+			comm = strings.TrimSpace(string(c))
+		}
+		rows = append(rows, rec{pid: pid, comm: comm, body: string(data), writeBytes: wb})
+	}
+	// Sort descending by write_bytes. Avoid pulling in sort.Slice -
+	// keep the function dependency-light; partial sort for top-30 is
+	// fine since we only need the head.
+	const keepN = 30
+	for i := 0; i < len(rows) && i < keepN; i++ {
+		maxIdx := i
+		for j := i + 1; j < len(rows); j++ {
+			if rows[j].writeBytes > rows[maxIdx].writeBytes {
+				maxIdx = j
+			}
+		}
+		rows[i], rows[maxIdx] = rows[maxIdx], rows[i]
+	}
+	if len(rows) > keepN {
+		rows = rows[:keepN]
+	}
+	var b strings.Builder
+	for _, r := range rows {
+		fmt.Fprintf(&b, "=== pid=%s comm=%s ===\n%s", r.pid, r.comm, r.body)
+		if !strings.HasSuffix(r.body, "\n") {
+			b.WriteString("\n")
+		}
 	}
 	return b.String()
 }
