@@ -18,18 +18,13 @@ import (
 
 func init() {
 	// Register the suite-end baseline dumper. Runs whether or not any spec
-	// failed — that's the whole point: a successful run still produces a
+	// failed - that's the whole point: a successful run still produces a
 	// host-samples directory you can diff against a failing run.
 	//
-	// After dumping, cancel the sampler context. Without this the long-lived
-	// vmstat/iostat subprocesses spawned by runLongLived stay alive after
-	// the Go test binary exits — they get reparented to PID 1 but remain in
-	// the bash step's process group, which is what `actions/runner` waits
-	// on before considering the step finished. Result: the step hangs for
-	// the full job-level timeout (60 minutes) on every passing run before
-	// the job is finally cancelled. Cancelling the context invokes
-	// exec.Cmd.Cancel (default Process.Kill), the subprocesses exit, and
-	// the bash step finishes cleanly.
+	// After dumping, cancel the sampler context to stop background pollers
+	// promptly. There are no long-lived subprocesses to kill any more (we
+	// read /proc files in-process, see sampleVmstat/sampleIostat) so this
+	// is purely a goroutine-stop signal.
 	report.PostDumpHook = func(r ginkgo.Report) {
 		DumpHostSamplesBaseline(r.SuiteDescription)
 		if hostSamplerCancel != nil {
@@ -50,11 +45,21 @@ func init() {
 // the k3d container making forward progress, so it keeps producing data while
 // the container is frozen. Three signals matter most:
 //
-//   - "docker stats" per k3d container — proves whether the cgroup got CPU
+//   - "docker stats" per k3d container - proves whether the cgroup got CPU
 //     cycles during the gap (host's view, not the frozen process's view).
-//   - Host PSI (/proc/pressure/{cpu,memory,io}) — quantifies whether the gap
+//   - Host PSI (/proc/pressure/{cpu,memory,io}) - quantifies whether the gap
 //     coincided with system-wide pressure.
-//   - vmstat — procs in R vs B, free/swap, ctxt/s, %sys/%idle. Cheap, dense.
+//   - vmstat-equivalent samples from /proc/stat + /proc/meminfo + /proc/vmstat
+//     + /proc/loadavg: procs running/blocked, ctxt switches, free/swap, paging.
+//
+// All samplers are in-process (no subprocess fork). Earlier revisions spawned
+// `vmstat -t -n 1` / `iostat -x -t 1` as long-lived child processes; on a
+// clean GitHub Actions runner those children inherit MAKE's jobserver pipe
+// FDs (3 and 4) and survive the Go test binary's exit. Make then waits on the
+// orphaned pipe FDs forever, which manifests as a 20-30 minute hang between
+// the last "make: Leaving directory" line and the 60-minute job timeout. The
+// in-process samplers below avoid that whole class of bug because no process
+// is ever forked - the file descriptors stay inside the Go runtime.
 //
 // Output goes to a per-process tmpdir; DumpHostSamplesTo copies them into the
 // bundle when a test fails.
@@ -65,11 +70,25 @@ var (
 	hostSamplerDir    string
 )
 
-// HostSamplerBaselineDir is where the suite-end snapshot of the rolling
-// sampler files is written, regardless of pass/fail. It deliberately lives
-// outside report.BaseDir so it isn't moved aside by DumpReport's startup
-// rename. The CI artifact upload pulls this path explicitly.
-const HostSamplerBaselineDir = "build/host-samples-baseline"
+// hostSamplerBaselineDir resolves the suite-end snapshot directory at the
+// moment of writing, deriving it from report.BaseDir so it follows the same
+// $KUMA_DUMP_DIR-based path the rest of the bundle uses. It deliberately
+// lives outside report.BaseDir so it isn't moved aside by DumpReport. The
+// CI artifact upload pulls "build/host-samples-baseline" explicitly, so
+// this must resolve to that absolute path on the runner.
+//
+// Layout assumption: report.BaseDir = "<workspace>/build/reports/e2e-debug"
+// (set by config.go from $KUMA_DUMP_DIR). Going up two parents gives
+// "<workspace>/build", which is where the artifact upload looks.
+//
+// Falls back to a relative path if report.BaseDir is empty (developer run
+// without $KUMA_DUMP_DIR set), so local invocations still produce something.
+func hostSamplerBaselineDir() string {
+	if report.BaseDir == "" {
+		return "build/host-samples-baseline"
+	}
+	return filepath.Join(filepath.Dir(filepath.Dir(report.BaseDir)), "host-samples-baseline")
+}
 
 // hostSamplerInterval is the polling cadence for the in-process samplers
 // (docker stats, host PSI). vmstat/iostat self-pace at 1s. Picked so a 4-minute
@@ -93,16 +112,18 @@ func StartHostSampler() {
 		ctx, cancel := context.WithCancel(context.Background())
 		hostSamplerCancel = cancel
 
-		// vmstat -n 1: timestamped 1s samples of procs/memory/swap/cpu.
-		// -n suppresses repeating headers so the file is straightforward to grep.
-		go runLongLived(ctx, filepath.Join(hostSamplerDir, "vmstat.txt"),
-			"vmstat", "-t", "-n", "1")
+		// vmstat-equivalent: read /proc/stat + /proc/loadavg + /proc/meminfo
+		// + /proc/vmstat directly each tick. No subprocess - see the comment
+		// at the top of this file for why.
+		go pollLoop(ctx, filepath.Join(hostSamplerDir, "vmstat.txt"),
+			hostSamplerInterval, sampleVmstat)
 
-		// iostat -x 1: per-device IO util%, await, queue depth. Disk stalls
-		// during cluster bring-up (e2e clusters write a lot to the kine DB and
-		// container layer storage) show up here.
-		go runLongLived(ctx, filepath.Join(hostSamplerDir, "iostat.txt"),
-			"iostat", "-x", "-t", "1")
+		// iostat-equivalent: /proc/diskstats per device. Disk stalls during
+		// cluster bring-up (e2e clusters write heavily to the kine DB and
+		// container layer storage) show up as growing in-flight queue depth
+		// and rising weighted-time-in-queue.
+		go pollLoop(ctx, filepath.Join(hostSamplerDir, "iostat.txt"),
+			hostSamplerInterval, sampleIostat)
 
 		// Periodic samplers: docker stats and host PSI.
 		go pollLoop(ctx, filepath.Join(hostSamplerDir, "docker-stats.tsv"),
@@ -195,7 +216,7 @@ func HostSamplerMark(label string) {
 }
 
 // DumpHostSamplesBaseline snapshots the current rolling sampler files into
-// HostSamplerBaselineDir, regardless of test outcome. Intended to be called
+// hostSamplerBaselineDir(), regardless of test outcome. Intended to be called
 // once per suite end so a fully-green run still produces a comparison
 // baseline. Subsequent calls overwrite — the file is the full history of the
 // process so the latest snapshot is always the most complete.
@@ -203,7 +224,7 @@ func DumpHostSamplesBaseline(suiteName string) {
 	if hostSamplerDir == "" {
 		return
 	}
-	dst := filepath.Join(HostSamplerBaselineDir, sanitizeFilename(suiteName))
+	dst := filepath.Join(hostSamplerBaselineDir(), sanitizeFilename(suiteName))
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		Logf("[host-sampler] mkdir %s: %v", dst, err)
 		return
@@ -240,27 +261,6 @@ func sanitizeFilename(s string) string {
 		}
 	}
 	return b.String()
-}
-
-// runLongLived starts a long-running command and pipes stdout to a file until
-// the context is cancelled. Used for vmstat/iostat, which self-pace.
-func runLongLived(ctx context.Context, outPath string, name string, args ...string) {
-	f, err := os.Create(outPath)
-	if err != nil {
-		Logf("[host-sampler] create %s: %v", outPath, err)
-		return
-	}
-	defer f.Close()
-	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Stdout = f
-	cmd.Stderr = f
-	if err := cmd.Start(); err != nil {
-		// vmstat/iostat may be missing on a developer machine; record once
-		// and move on. Don't fail the test for a missing diagnostics tool.
-		fmt.Fprintf(f, "failed to start %s: %v\n", name, err)
-		return
-	}
-	_ = cmd.Wait()
 }
 
 // pollLoop runs sample at hostSamplerInterval and appends results to outPath.
@@ -314,9 +314,100 @@ func sampleDockerStats() string {
 	return strings.Join(keep, "\n")
 }
 
+// sampleVmstat reads /proc files to produce a vmstat-equivalent sample
+// without forking a subprocess. The keys we care about, mapping back to the
+// columns vmstat would print:
+//
+//	procs r/b           - /proc/loadavg's "running/total" field, plus
+//	                      procs_running/procs_blocked from /proc/stat
+//	memory free/cached  - MemFree, Buffers, Cached, SwapFree from /proc/meminfo
+//	swap si/so          - pswpin/pswpout from /proc/vmstat (cumulative; deltas
+//	                      between samples = pages/sec swapped in/out)
+//	io bi/bo            - pgpgin/pgpgout from /proc/vmstat (sectors read/written)
+//	system in/cs        - intr/ctxt from /proc/stat
+//	cpu us/sy/id/wa/st  - cpu line from /proc/stat (jiffies; consumer computes deltas)
+//
+// We emit raw counters and let downstream consumers compute rates - same
+// strategy as docker-stats.tsv. One sample per call, no statefulness here.
+func sampleVmstat() string {
+	var b strings.Builder
+	if data, err := os.ReadFile("/proc/loadavg"); err == nil {
+		fmt.Fprintf(&b, "loadavg %s", string(data))
+	}
+	if data, err := os.ReadFile("/proc/stat"); err == nil {
+		for line := range strings.SplitSeq(string(data), "\n") {
+			switch {
+			case strings.HasPrefix(line, "cpu "),
+				strings.HasPrefix(line, "ctxt "),
+				strings.HasPrefix(line, "intr "),
+				strings.HasPrefix(line, "procs_running "),
+				strings.HasPrefix(line, "procs_blocked "):
+				fmt.Fprintf(&b, "%s\n", line)
+			}
+		}
+	}
+	if data, err := os.ReadFile("/proc/meminfo"); err == nil {
+		for line := range strings.SplitSeq(string(data), "\n") {
+			switch {
+			case strings.HasPrefix(line, "MemFree:"),
+				strings.HasPrefix(line, "MemAvailable:"),
+				strings.HasPrefix(line, "Buffers:"),
+				strings.HasPrefix(line, "Cached:"),
+				strings.HasPrefix(line, "SwapTotal:"),
+				strings.HasPrefix(line, "SwapFree:"),
+				strings.HasPrefix(line, "Dirty:"),
+				strings.HasPrefix(line, "Writeback:"):
+				fmt.Fprintf(&b, "%s\n", line)
+			}
+		}
+	}
+	if data, err := os.ReadFile("/proc/vmstat"); err == nil {
+		for line := range strings.SplitSeq(string(data), "\n") {
+			switch {
+			case strings.HasPrefix(line, "pgpgin "),
+				strings.HasPrefix(line, "pgpgout "),
+				strings.HasPrefix(line, "pswpin "),
+				strings.HasPrefix(line, "pswpout "),
+				strings.HasPrefix(line, "pgmajfault "),
+				strings.HasPrefix(line, "pgfault "):
+				fmt.Fprintf(&b, "%s\n", line)
+			}
+		}
+	}
+	return b.String()
+}
+
+// sampleIostat reads /proc/diskstats for an iostat -x equivalent. Each line
+// has 14+ fields (since kernel 4.18); the relevant ones for spotting stalls:
+//
+//	field 9  - I/Os currently in progress
+//	field 10 - time spent doing I/Os (ms; cumulative)
+//	field 11 - weighted time spent in queue (ms; cumulative; main stall signal)
+//
+// Loop and ram devices are skipped to keep the file focused on real disks.
+func sampleIostat() string {
+	data, err := os.ReadFile("/proc/diskstats")
+	if err != nil {
+		return fmt.Sprintf("diskstats failed: %v", err)
+	}
+	var b strings.Builder
+	for line := range strings.SplitSeq(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 14 {
+			continue
+		}
+		name := fields[2]
+		if strings.HasPrefix(name, "loop") || strings.HasPrefix(name, "ram") {
+			continue
+		}
+		fmt.Fprintf(&b, "%s\n", strings.TrimSpace(line))
+	}
+	return b.String()
+}
+
 // sampleHostPressure reads the host's PSI counters. Available on cgroup-v2
 // hosts (Linux 4.20+, all current GitHub runners). Each counter has avg10/60/300
-// percentages plus a monotonic "total" of stalled microseconds — the deltas
+// percentages plus a monotonic "total" of stalled microseconds - the deltas
 // between samples tell us how much wall-clock time was lost to pressure.
 func sampleHostPressure() string {
 	var b strings.Builder
