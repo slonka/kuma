@@ -21,15 +21,19 @@ func init() {
 	// failed - that's the whole point: a successful run still produces a
 	// host-samples directory you can diff against a failing run.
 	//
-	// After dumping, cancel the sampler context to stop background pollers
-	// promptly. There are no long-lived subprocesses to kill any more (we
-	// read /proc files in-process, see sampleVmstat/sampleIostat) so this
-	// is purely a goroutine-stop signal.
+	// We deliberately do NOT cancel the sampler context here. A `make test/e2e`
+	// invocation runs ginkgo across multiple suites in one binary process and
+	// each suite ends with its own ReportAfterSuite -> DumpReport -> PostDumpHook
+	// chain. If we cancel after the first suite's PostDumpHook fires, all
+	// later suites run with no host sampling, so any failure that happens in
+	// suite N>1 has no rolling host-samples data to inspect. (Observed on
+	// PR #16455 run 25309274732: docker-stats stops at 09:02:37 from the
+	// Federation_Suite end, but the Helm-suite failure is at 09:06:43 and
+	// has no host data.) The cancel was needed previously to kill long-lived
+	// vmstat/iostat subprocesses; those are in-process pollers now, so the
+	// goroutines exit naturally on test-binary exit.
 	report.PostDumpHook = func(r ginkgo.Report) {
 		DumpHostSamplesBaseline(r.SuiteDescription)
-		if hostSamplerCancel != nil {
-			hostSamplerCancel()
-		}
 	}
 }
 
