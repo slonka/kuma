@@ -390,6 +390,18 @@ echo "=== oom / softlockup / hung_task in dmesg ==="
 dmesg -T 2>/dev/null | grep -iE 'oom|softlockup|hung_task|out of memory|killed process' || echo "none"
 echo "=== procs in D state ==="
 ps -eo pid,stat,wchan,cmd 2>/dev/null | awk '$2 ~ /D/' || true
+echo "=== /proc/schedstat ==="
+cat /proc/schedstat 2>/dev/null || echo "schedstat unavailable"
+echo "=== /proc/net/dev ==="
+cat /proc/net/dev 2>/dev/null || true
+echo "=== conntrack count / max ==="
+for f in /proc/sys/net/netfilter/nf_conntrack_count /proc/sys/net/netfilter/nf_conntrack_max /proc/sys/net/nf_conntrack_max; do
+  [ -r "$f" ] && echo "$f=$(cat "$f")"
+done
+echo "=== iptables-save -c -t filter ==="
+iptables-save -c -t filter 2>/dev/null | head -300 || echo "iptables-save unavailable"
+echo "=== iptables-save -c -t nat ==="
+iptables-save -c -t nat 2>/dev/null | head -300 || true
 `
 	out, err := exec.CommandContext(ctx, "docker", "exec", containerName, "sh", "-c", script).CombinedOutput()
 	if err != nil {

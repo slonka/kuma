@@ -159,6 +159,40 @@ func StartHostSampler() {
 		// kuma-init etc. - distinguishable via the cgroup column.
 		go pollLoop(ctx, filepath.Join(hostSamplerDir, "top-procs.txt"),
 			hostSamplerInterval, sampleTopProcesses)
+
+		// /proc/schedstat: per-CPU runqueue wait time. Field 7 of every
+		// "cpu<N>" line is sum_sched_wait, the cumulative nanoseconds tasks
+		// spent on the runqueue waiting to be scheduled. The delta between
+		// two samples is the only direct quantification of "tasks were
+		// queued and could not get CPU"; PSI's "% wall time stalled" is a
+		// derived metric, schedstat is the raw counter.
+		go pollLoop(ctx, filepath.Join(hostSamplerDir, "schedstat.txt"),
+			hostSamplerInterval, sampleSchedstat)
+
+		// Per-cgroup cpu.stat for each k3d container. Captures CFS throttle
+		// counters (nr_throttled, throttled_usec, nr_periods) which complement
+		// PSI: PSI tells us tasks waited; cpu.stat tells us whether they
+		// waited because of CFS bandwidth control (limits) or shares
+		// contention. With CPU requests but no limits the throttle counters
+		// should stay at 0; if they don't, our diagnosis is wrong.
+		go pollLoop(ctx, filepath.Join(hostSamplerDir, "cpu-stat.txt"),
+			hostSamplerInterval, sampleK3dCgroupCPUStat)
+
+		// Per-PID kernel-side wait info for hot or stuck procs. /proc/<pid>/wchan
+		// is a one-line label naming the kernel function the task is sleeping
+		// in (e.g. "futex_wait_queue", "io_schedule", "do_wait"); /proc/<pid>/stack
+		// is the kernel call stack itself. Sampled only for the top-N CPU procs
+		// and any D-state proc to keep volume bounded.
+		go pollLoop(ctx, filepath.Join(hostSamplerDir, "proc-stack.txt"),
+			hostSamplerInterval, sampleProcStack)
+
+		// Per-interface network counters and conntrack table size. Calico's
+		// veth pairs and iptables-driven NAT are not visible in docker stats;
+		// drops/errors here would localize a calico-vs-flannel divergence to
+		// the network stack rather than CPU. conntrack_count vs
+		// conntrack_max exhaustion is a known calico failure mode.
+		go pollLoop(ctx, filepath.Join(hostSamplerDir, "net-counters.txt"),
+			hostSamplerInterval, sampleNetCounters)
 	})
 }
 
@@ -461,16 +495,25 @@ func sampleK3dPressure() string {
 	return b.String()
 }
 
-// sampleK3dKubepodsPressure walks every cpu.pressure file under
-// kubepods.slice inside each k3d node and emits its contents. With CPU
-// requests but no limits, throttling stats stay at zero even under heavy
-// contention; per-cgroup PSI is the only direct quantification of "this
-// container's tasks were stuck waiting for CPU." The "full avg10/avg60/avg300"
-// fields read as percentages of wall time during which every task in the
-// cgroup was waiting on CPU. Stable above ~5% indicates real starvation,
-// numbers approaching 100% indicate a fully blocked cgroup.
+// sampleK3dKubepodsPressure walks every cpu.pressure file under any kubepods
+// hierarchy inside each k3d node and emits its contents. With CPU requests
+// but no limits, throttling stats stay at zero even under heavy contention;
+// per-cgroup PSI is the only direct quantification of "this container's
+// tasks were stuck waiting for CPU." The "full avg10/avg60/avg300" fields
+// read as percentages of wall time during which every task in the cgroup
+// was waiting on CPU. Stable above ~5% indicates real starvation, numbers
+// approaching 100% indicate a fully blocked cgroup.
 //
-// Memory and IO pressure files are skipped to keep the sample size bounded —
+// Path-probing matters: cgroup-v2 layouts vary by distro and runtime. The
+// previous revision hardcoded /sys/fs/cgroup/kubepods.slice and silently
+// returned nothing on this k3s setup (find produced 0 results), so we had
+// no per-pod pressure data despite thinking we did. The script below probes
+// known kubepods locations and prints a marker line so the bundle records
+// which path was actually used - if that line says "no kubepods cgroup
+// found", we know to look elsewhere instead of assuming the cgroups are
+// just quiet.
+//
+// Memory and IO pressure files are skipped to keep the sample size bounded -
 // host-pressure already captures system-wide memory/IO PSI, and the failure
 // mode under investigation is CPU. Add them back if the suspect changes.
 func sampleK3dKubepodsPressure() string {
@@ -481,16 +524,38 @@ func sampleK3dKubepodsPressure() string {
 	if err != nil {
 		return fmt.Sprintf("docker ps failed: %v", err)
 	}
-	// Inside each container: walk kubepods.slice; for every cpu.pressure,
-	// emit the cgroup path and its contents. Filter out cgroups whose
-	// "full" line is exactly zero — they have nothing interesting to say
-	// and dominate the file size on a quiet test. Cgroups under load
-	// (some/full > 0) and the kubepods slice itself are always included.
+	// Try a few known kubepods locations in order. Whichever matches first
+	// wins; the marker line lets us see from the bundle which path was used.
+	// Filter out cgroups whose "full" line is exactly zero - they have
+	// nothing interesting to say and dominate the file size on a quiet test.
+	// Top-level kubepods slice is always included so we have a baseline.
 	const script = `
-find /sys/fs/cgroup/kubepods.slice -name 'cpu.pressure' 2>/dev/null | while read f; do
+roots="/sys/fs/cgroup/kubepods.slice /sys/fs/cgroup/kubepods /sys/fs/cgroup/kubepods-besteffort.slice /sys/fs/cgroup/kubepods-burstable.slice"
+chosen=""
+for r in $roots; do
+  [ -d "$r" ] || continue
+  count=$(find "$r" -name 'cpu.pressure' 2>/dev/null | wc -l)
+  [ "$count" -gt 0 ] || continue
+  chosen="$r"
+  echo "### kubepods root: $r ($count cpu.pressure files)"
+  break
+done
+if [ -z "$chosen" ]; then
+  # Last-ditch search across the whole cgroup tree for any kubepods*
+  # directory containing cpu.pressure. Slower but defensive.
+  matched=$(find /sys/fs/cgroup -maxdepth 4 -path '*kubepods*' -name 'cpu.pressure' 2>/dev/null | head -1)
+  if [ -n "$matched" ]; then
+    chosen=$(dirname "$matched" | sed 's,/[^/]*$,,')
+    echo "### kubepods root: $chosen (via wildcard search)"
+  else
+    echo "### kubepods root: NONE FOUND (probed: $roots)"
+  fi
+fi
+[ -n "$chosen" ] || exit 0
+find "$chosen" -name 'cpu.pressure' 2>/dev/null | while read f; do
   contents=$(cat "$f" 2>/dev/null)
   case "$f" in
-    */kubepods.slice/cpu.pressure) include=1 ;;
+    "$chosen/cpu.pressure") include=1 ;;
     *) include=0 ;;
   esac
   case "$contents" in
@@ -552,4 +617,196 @@ func sampleTopProcesses() string {
 		lines = lines[:keepN]
 	}
 	return strings.Join(lines, "\n")
+}
+
+// sampleSchedstat reads /proc/schedstat. The "cpu<N>" lines record per-CPU
+// scheduler counters; field 7 (1-indexed) is sum_sched_wait, the cumulative
+// nanoseconds tasks spent on the runqueue waiting to be scheduled. Deltas
+// between samples convert to "ns of runqueue wait incurred during this
+// 2-second tick" - the cleanest single signal for "the host couldn't keep
+// up with the work submitted to it". Saturated host: numbers grow by
+// hundreds-of-millions of ns/sec per CPU. Quiet host: near zero.
+//
+// We emit the raw counters; downstream consumers compute rates. Fields
+// are documented in the kernel's Documentation/scheduler/sched-stats.rst.
+// Format version is on the first line; if it changes we'll see the older
+// data anyway.
+func sampleSchedstat() string {
+	data, err := os.ReadFile("/proc/schedstat")
+	if err != nil {
+		return fmt.Sprintf("schedstat failed: %v", err)
+	}
+	return string(data)
+}
+
+// sampleK3dCgroupCPUStat reads cpu.stat from each k3d node's kubepods
+// hierarchy via docker exec. cpu.stat fields of interest:
+//
+//	usage_usec      - cumulative CPU time used (cgroup-v2)
+//	user_usec       - user-mode portion of usage_usec
+//	system_usec     - kernel-mode portion of usage_usec
+//	nr_periods      - number of CFS bandwidth periods elapsed
+//	nr_throttled    - number of periods this cgroup was throttled
+//	throttled_usec  - cumulative time throttled
+//
+// With CPU requests but no limits the throttle counters should stay at 0.
+// PSI captures the symptom (tasks waited); cpu.stat distinguishes the
+// cause (CFS bandwidth control vs shares contention). If throttled_usec
+// is non-zero the diagnosis "shares contention only" is wrong.
+//
+// Same path-probe pattern as sampleK3dKubepodsPressure; record the path
+// chosen so the bundle is self-explanatory.
+func sampleK3dCgroupCPUStat() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	listOut, err := exec.CommandContext(ctx, "docker", "ps", "--filter", "name=k3d-",
+		"--filter", "status=running", "--format", "{{.Names}}").Output()
+	if err != nil {
+		return fmt.Sprintf("docker ps failed: %v", err)
+	}
+	const script = `
+roots="/sys/fs/cgroup/kubepods.slice /sys/fs/cgroup/kubepods /sys/fs/cgroup/kubepods-besteffort.slice /sys/fs/cgroup/kubepods-burstable.slice"
+echo "=== /sys/fs/cgroup/cpu.stat ==="
+cat /sys/fs/cgroup/cpu.stat 2>/dev/null
+chosen=""
+for r in $roots; do
+  [ -d "$r" ] || continue
+  [ -f "$r/cpu.stat" ] || continue
+  chosen="$r"
+  break
+done
+if [ -z "$chosen" ]; then
+  echo "### no kubepods cpu.stat found"
+  exit 0
+fi
+echo "### kubepods root: $chosen"
+echo "=== $chosen/cpu.stat ==="
+cat "$chosen/cpu.stat" 2>/dev/null
+# Per-pod cpu.stat. Limit to the first 30 to keep volume bounded; more
+# than that and we're looking at the wrong metric anyway.
+find "$chosen" -mindepth 1 -maxdepth 3 -name 'cpu.stat' 2>/dev/null | head -30 | while read f; do
+  echo "=== $f ==="
+  cat "$f" 2>/dev/null
+done
+`
+	var b strings.Builder
+	for name := range strings.FieldsSeq(string(listOut)) {
+		execCtx, execCancel := context.WithTimeout(context.Background(), 4*time.Second)
+		out, err := exec.CommandContext(execCtx, "docker", "exec", name, "sh", "-c", script).CombinedOutput()
+		execCancel()
+		fmt.Fprintf(&b, "--- %s ---\n", name)
+		if err != nil {
+			fmt.Fprintf(&b, "exec error: %v\n", err)
+		}
+		if len(out) > 0 {
+			b.Write(out)
+			if !strings.HasSuffix(string(out), "\n") {
+				b.WriteString("\n")
+			}
+		}
+	}
+	return b.String()
+}
+
+// sampleProcStack captures /proc/<pid>/wchan and /proc/<pid>/stack for the
+// top-N CPU procs and any D-state proc on the host. wchan is a one-line
+// label naming the kernel function the task is sleeping in (e.g.
+// "futex_wait_queue", "io_schedule", "do_wait", "ep_poll"); stack is the
+// full kernel call stack. Together they answer "what is this process
+// stuck on?" without needing perf or bpftrace.
+//
+// Bounded: top 5 by CPU plus all D-state procs, capped at 15 total. Both
+// /proc/<pid>/stack and wchan require root (we run as root in CI). On a
+// developer machine without root the stack reads will produce "0xffff..."
+// or empty - that's fine, just less useful.
+func sampleProcStack() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "ps",
+		"-eo", "pid,pcpu,stat,comm",
+		"--sort=-pcpu", "--no-headers",
+	).Output()
+	if err != nil {
+		return fmt.Sprintf("ps failed: %v", err)
+	}
+	type proc struct{ pid, pcpu, stat, comm string }
+	var top, dState []proc
+	for line := range strings.SplitSeq(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			continue
+		}
+		p := proc{pid: fields[0], pcpu: fields[1], stat: fields[2], comm: fields[3]}
+		if len(top) < 5 {
+			top = append(top, p)
+		}
+		if strings.HasPrefix(p.stat, "D") && len(dState) < 10 {
+			dState = append(dState, p)
+		}
+	}
+	picks := append([]proc{}, top...)
+	for _, d := range dState {
+		dup := false
+		for _, t := range top {
+			if t.pid == d.pid {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			picks = append(picks, d)
+		}
+	}
+	if len(picks) > 15 {
+		picks = picks[:15]
+	}
+	var b strings.Builder
+	for _, p := range picks {
+		fmt.Fprintf(&b, "=== pid=%s pcpu=%s stat=%s comm=%s ===\n", p.pid, p.pcpu, p.stat, p.comm)
+		if data, err := os.ReadFile("/proc/" + p.pid + "/wchan"); err == nil {
+			fmt.Fprintf(&b, "wchan: %s\n", strings.TrimSpace(string(data)))
+		}
+		if data, err := os.ReadFile("/proc/" + p.pid + "/stack"); err == nil {
+			b.WriteString("stack:\n")
+			b.Write(data)
+			if !strings.HasSuffix(string(data), "\n") {
+				b.WriteString("\n")
+			}
+		}
+	}
+	return b.String()
+}
+
+// sampleNetCounters reads /proc/net/dev for per-interface bytes/packets/
+// drops/errors and a few netfilter counters relevant to the calico-vs-flannel
+// gap. Calico creates one veth pair per pod plus iptables-driven NAT; if
+// drops or errors spike on those interfaces during a freeze, the freeze
+// is at least partly network-bound. conntrack_count vs conntrack_max
+// exhaustion is a known calico failure mode.
+//
+// /proc/net/dev format (tab-separated after the iface name):
+//
+//	iface: rx_bytes rx_packets rx_errs rx_drop ... tx_bytes tx_packets tx_errs tx_drop ...
+//
+// We keep all interfaces; on a CI runner there are usually fewer than 30,
+// and filtering would risk excluding the calico veth pair we want.
+func sampleNetCounters() string {
+	var b strings.Builder
+	if data, err := os.ReadFile("/proc/net/dev"); err == nil {
+		b.WriteString("--- /proc/net/dev ---\n")
+		b.Write(data)
+	}
+	for _, p := range []string{
+		"/proc/sys/net/netfilter/nf_conntrack_count",
+		"/proc/sys/net/netfilter/nf_conntrack_max",
+		"/proc/sys/net/nf_conntrack_max",
+	} {
+		if data, err := os.ReadFile(p); err == nil {
+			fmt.Fprintf(&b, "--- %s ---\n%s", p, string(data))
+		}
+	}
+	if data, err := os.ReadFile("/proc/net/sockstat"); err == nil {
+		fmt.Fprintf(&b, "--- /proc/net/sockstat ---\n%s", string(data))
+	}
+	return b.String()
 }
