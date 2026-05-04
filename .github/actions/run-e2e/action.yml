@@ -26,6 +26,17 @@ runs:
         remove_android: true
         remove_dotnet: true
         remove_haskell: true
+    # Independent host-metrics sampler. Runs in the same VM as the test
+    # process, so it dies if the runner itself is killed - but it's a
+    # different code path from test/framework/host_sampler.go, so a freeze
+    # that affects only our Go binary will still produce data here. Useful
+    # as a cross-check while we figure out the freeze root cause; can be
+    # removed once we have an answer.
+    - uses: catchpoint/workflow-telemetry-action@94c3c3d9567a0205de6da68a76c428ce4e769af1 # v2.0.0
+      with:
+        comment_on_pr: false
+        proc_trace_chart_show: false
+        job_summary: true
     - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
       env:
         GITHUB_TOKEN: ${{ github.token }}
