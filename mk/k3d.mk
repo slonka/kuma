@@ -328,7 +328,13 @@ endif
 k3d/cluster/stop:
 	$(Q)$(K3D) cluster delete $(CLUSTER_NAME) && rm -f $(K3D_CLUSTER_KUBECONFIG)
 ifeq ($(GOOS)$(CI),linuxtrue)
-	$(Q)rm -rf "$(K3D_KINE_TMPFS_DIR)" "$(K3D_VARLOG_TMPFS_DIR)" "$(K3D_CONTAINERD_TMPFS_DIR)"
+	@# Files inside the bind-mounted tmpfs dirs are written by k3s/kubelet/
+	@# containerd as root inside the k3d container (no user-namespace remap)
+	@# so they show up on the host as UID 0 and the runner user can't unlink
+	@# them. sudo is available passwordless on GH-hosted runners (and we use
+	@# it elsewhere - free-disk-space, sysctl, journald restart). Trailing
+	@# `|| true` keeps cleanup failures from masking real test results.
+	$(Q)sudo rm -rf "$(K3D_KINE_TMPFS_DIR)" "$(K3D_VARLOG_TMPFS_DIR)" "$(K3D_CONTAINERD_TMPFS_DIR)" || true
 endif
 
 # Orchestrated via sequential $(MAKE) calls to guarantee ordering under -j.
