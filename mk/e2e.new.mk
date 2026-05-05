@@ -2,6 +2,7 @@ K8SCLUSTERS = kuma-1 kuma-2
 K8SCLUSTERS_START_TARGETS = $(addprefix test/e2e/k8s/start/cluster/, $(K8SCLUSTERS))
 K8SCLUSTERS_STOP_TARGETS = $(addprefix test/e2e/k8s/stop/cluster/, $(K8SCLUSTERS))
 K8SCLUSTERS_LOAD_IMAGES_TARGETS = $(addprefix test/e2e/k8s/load/images/, $(K8SCLUSTERS))
+K8SCLUSTERS_PREWARM_KUMACTL_TARGETS = $(addprefix test/e2e/k8s/prewarm/kumactl/, $(K8SCLUSTERS))
 K8SCLUSTERS_WAIT_TARGETS = $(addprefix test/e2e/k8s/wait/, $(K8SCLUSTERS))
 # export `IPV6=true` to enable IPv6 testing
 
@@ -75,6 +76,10 @@ test/e2e/k8s/load/images/$1:
 test/e2e/k8s/wait/$1:
 	CLUSTER=$1 $(MAKE) $(K8S_CLUSTER_TOOL)/cluster/wait
 
+.PHONY: test/e2e/k8s/prewarm/kumactl/$1
+test/e2e/k8s/prewarm/kumactl/$1:
+	CLUSTER=$1 $(MAKE) $(K8S_CLUSTER_TOOL)/cluster/prewarm/kumactl
+
 .PHONY: test/e2e/k8s/stop/cluster/$1
 test/e2e/k8s/stop/cluster/$1:
 	CLUSTER=$1 $(MAKE) $(K8S_CLUSTER_TOOL)/cluster/stop
@@ -88,6 +93,7 @@ endif
 E2E_ENV_VARS += KUMACTLBIN=${BUILD_ARTIFACTS_DIR}/kumactl/kumactl
 E2E_ENV_VARS += PATH=$(CI_TOOLS_BIN_DIR):$$PATH
 E2E_ENV_VARS += KUMA_DUMP_DIR=$(abspath $(REPORTS_DIR)/e2e-debug)
+E2E_PREWARM_KUMACTL ?= $(if $(CI),true,false)
 .PHONY: test/e2e/list
 test/e2e/list:
 	@echo $(ALL_TESTS)
@@ -98,6 +104,14 @@ test/e2e/k8s/start: $(K8SCLUSTERS_START_TARGETS)
 
 .PHONY: test/e2e/k8s/stop
 test/e2e/k8s/stop: $(K8SCLUSTERS_STOP_TARGETS)
+
+.PHONY: test/e2e/k8s/prewarm/kumactl
+test/e2e/k8s/prewarm/kumactl:
+ifeq ($(E2E_PREWARM_KUMACTL),true)
+	$(MAKE) $(K8SCLUSTERS_PREWARM_KUMACTL_TARGETS)
+else
+	@echo "Skipping kumactl pre-warm (E2E_PREWARM_KUMACTL=$(E2E_PREWARM_KUMACTL))"
+endif
 
 # test/e2e/debug is used for quicker feedback of E2E tests (ex. debugging flaky tests)
 # It runs tests with fail fast which means you don't have to wait for all tests to get information that something failed
@@ -111,6 +125,7 @@ test/e2e/debug: $(E2E_DEPS_TARGETS)
 	$(MAKE) docker/tag
 	$(MAKE) $(K8SCLUSTERS_LOAD_IMAGES_TARGETS) # K3D is able to load images before the cluster is ready. It retries if cluster is not able to handle images yet.
 	$(MAKE) $(K8SCLUSTERS_WAIT_TARGETS) # there is no easy way of waiting for processes in the background so just wait for K8S clusters
+	$(MAKE) test/e2e/k8s/prewarm/kumactl
 	$(E2E_ENV_VARS) \
 	$(GINKGO_TEST_E2E) --procs 1 --keep-going=false --fail-fast $(E2E_PKG_LIST)
 	$(MAKE) test/e2e/k8s/stop
@@ -133,6 +148,7 @@ test/e2e: $(E2E_DEPS_TARGETS) $(E2E_K8S_BIN_DEPS) ## Run slower e2e tests (slowe
 		{ echo "ERROR: E2E_PKG_LIST does not contain ./test/e2e/ packages: $(E2E_PKG_LIST)"; exit 1; }
 	$(MAKE) docker/tag
 	$(MAKE) test/e2e/k8s/start
+	$(MAKE) test/e2e/k8s/prewarm/kumactl
 	$(E2E_ENV_VARS) $(GINKGO_TEST_E2E) $(E2E_PKG_LIST) || (ret=$$?; $(MAKE) test/e2e/k8s/stop && exit $$ret)
 	$(MAKE) test/e2e/k8s/stop
 
@@ -149,10 +165,12 @@ ifdef DEBUG
 	done; \
 	if [ $$need_start -eq 1 ]; then \
 		$(MAKE) test/e2e/k8s/start; \
-	fi
+	fi; \
+	$(MAKE) test/e2e/k8s/prewarm/kumactl
 	$(E2E_ENV_VARS) $(GINKGO_TEST_E2E) $(KUBE_E2E_PKG_LIST)
 else
 	$(MAKE) test/e2e/k8s/start
+	$(MAKE) test/e2e/k8s/prewarm/kumactl
 	$(E2E_ENV_VARS) $(GINKGO_TEST_E2E) $(KUBE_E2E_PKG_LIST) || (ret=$$?; $(MAKE) test/e2e/k8s/stop && exit $$ret)
 	$(MAKE) test/e2e/k8s/stop
 endif
@@ -163,6 +181,7 @@ test/e2e-gatewayapi: $(E2E_DEPS_TARGETS) $(E2E_K8S_BIN_DEPS) ## Run kubernetes e
 	$(MAKE) test/e2e/k8s/start/cluster/kuma-1
 	$(MAKE) test/e2e/k8s/wait/kuma-1
 	$(MAKE) test/e2e/k8s/load/images/kuma-1
+	$(MAKE) test/e2e/k8s/prewarm/kumactl/kuma-1
 	$(E2E_ENV_VARS) $(GINKGO_TEST_E2E) ./test/e2e_env/gatewayapi || (ret=$$?; $(MAKE) test/e2e/k8s/stop/cluster/kuma-1 && exit $$ret)
 	$(MAKE) test/e2e/k8s/stop/cluster/kuma-1
 
@@ -175,5 +194,6 @@ test/e2e-universal: $(E2E_DEPS_TARGETS) $(E2E_UNIVERSAL_BIN_DEPS) k8s/docker/net
 test/e2e-multizone: $(E2E_DEPS_TARGETS) $(E2E_K8S_BIN_DEPS) ## Run multizone e2e tests. Use DEBUG=1 to more easily find issues
 	$(MAKE) docker/tag
 	$(MAKE) test/e2e/k8s/start
+	$(MAKE) test/e2e/k8s/prewarm/kumactl
 	$(E2E_ENV_VARS) $(GINKGO_TEST_E2E) $(MULTIZONE_E2E_PKG_LIST) || (ret=$$?; $(MAKE) test/e2e/k8s/stop && exit $$ret)
 	$(MAKE) test/e2e/k8s/stop

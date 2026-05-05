@@ -82,6 +82,11 @@ kind/clusters/stop:
 kind/cluster/load/images:
 	for image in ${KUMA_IMAGES}; do $(KIND) load docker-image $$image --name=$(CLUSTER_NAME); done
 
+.PHONY: kind/cluster/prewarm/kumactl
+kind/cluster/prewarm/kumactl: export KUBECONFIG = $(KIND_CLUSTER_KUBECONFIG)
+kind/cluster/prewarm/kumactl:
+	$(KUMACTL_PREWARM_RECIPE)
+
 .PHONY: kind/cluster/load
 kind/cluster/load: images docker/tag kind/cluster/load/images
 

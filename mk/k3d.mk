@@ -155,6 +155,10 @@ _k3d_import = $(K3D) image import \
 k3d/cluster/load/images:
 	$(Q)$(call _retry,$(_k3d_import),$(K3D_IMAGE_IMPORT_RETRIES),k3d image import to $(CLUSTER_NAME))
 
+.PHONY: k3d/cluster/prewarm/kumactl
+k3d/cluster/prewarm/kumactl:
+	$(KUMACTL_PREWARM_RECIPE)
+
 # --- CNI setup ---
 
 .PHONY: k3d/cluster/cni/setup

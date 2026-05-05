@@ -24,6 +24,51 @@ KUBECONFIG_DIR ?= $(HOME)/.kube
 # tool-specific files export it per-target instead.
 unexport KUBECONFIG
 
+# --- E2E pre-warm experiment ---
+
+KUMACTL_PREWARM_NAMESPACE ?= kube-system
+KUMACTL_PREWARM_TIMEOUT ?= 120s
+KUMA_INIT_IMAGE ?= $(DOCKER_REGISTRY)/kuma-init:$(BUILD_INFO_VERSION)
+
+define KUMACTL_PREWARM_RECIPE
+	$(Q)for node in $$($(KUBECTL) get nodes -o jsonpath='{.items[*].metadata.name}'); do \
+	  pod_name=$$(printf 'kumactl-prewarm-%s' "$$node" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-'); \
+	  echo "Pre-warming $$node with $(KUMA_INIT_IMAGE)"; \
+	  printf '%s\n' \
+	    'apiVersion: v1' \
+	    'kind: Pod' \
+	    'metadata:' \
+	    "  name: $$pod_name" \
+	    '  namespace: $(KUMACTL_PREWARM_NAMESPACE)' \
+	    '  labels:' \
+	    '    app.kubernetes.io/name: kumactl-prewarm' \
+	    'spec:' \
+	    "  nodeName: $$node" \
+	    '  restartPolicy: Never' \
+	    '  terminationGracePeriodSeconds: 0' \
+	    '  tolerations:' \
+	    '  - operator: Exists' \
+	    '  containers:' \
+	    '  - name: kumactl-prewarm' \
+	    '    image: $(KUMA_INIT_IMAGE)' \
+	    '    imagePullPolicy: IfNotPresent' \
+	    '    command:' \
+	    '    - /usr/bin/kumactl' \
+	    '    - install' \
+	    '    - transparent-proxy' \
+	    '    - --dry-run' \
+	    '    - --redirect-all-dns-traffic' \
+	    '    - --verbose' | $(KUBECTL) apply -f -; \
+	  if ! $(KUBECTL) wait --namespace $(KUMACTL_PREWARM_NAMESPACE) --for=jsonpath='{.status.phase}'=Succeeded --timeout $(KUMACTL_PREWARM_TIMEOUT) pod/$$pod_name; then \
+	    $(KUBECTL) describe --namespace $(KUMACTL_PREWARM_NAMESPACE) pod/$$pod_name || true; \
+	    $(KUBECTL) logs --namespace $(KUMACTL_PREWARM_NAMESPACE) pod/$$pod_name || true; \
+	    $(KUBECTL) delete --namespace $(KUMACTL_PREWARM_NAMESPACE) pod/$$pod_name --ignore-not-found=true --wait=false; \
+	    exit 1; \
+	  fi; \
+	  $(KUBECTL) delete --namespace $(KUMACTL_PREWARM_NAMESPACE) pod/$$pod_name --ignore-not-found=true --wait=false; \
+	done
+endef
+
 # --- Validation ---
 
 _k8s_cluster_valid := $(or \
