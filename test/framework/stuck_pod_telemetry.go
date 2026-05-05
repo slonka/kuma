@@ -247,7 +247,10 @@ resolve_mapping_for_ip() {
       return
       ;;
   esac
-  ip_value=$((16#${ip_hex#0x}))
+  ip_value="$(printf '%%d' "$ip_hex" 2>/dev/null)" || {
+    echo "instruction_pointer=unavailable ($ip_hex)"
+    return
+  }
   while IFS= read -r line; do
     set -- $line
     [ $# -ge 5 ] || continue
@@ -260,8 +263,8 @@ resolve_mapping_for_ip() {
     mapping_path="$*"
     start_hex="${range%%-*}"
     end_hex="${range#*-}"
-    start_value=$((16#$start_hex))
-    end_value=$((16#$end_hex))
+    start_value="$(printf '%%d' "0x$start_hex" 2>/dev/null)" || continue
+    end_value="$(printf '%%d' "0x$end_hex" 2>/dev/null)" || continue
     if [ "$ip_value" -ge "$start_value" ] && [ "$ip_value" -lt "$end_value" ]; then
       echo "instruction_pointer=$ip_hex"
       echo "mapping_range=$range perms=$perms offset=$offset dev=$dev inode=$inode"
