@@ -107,51 +107,6 @@ ifeq ($(GOOS),linux)
 K3D_CLUSTER_CREATE_OPTS += --volume "/sys/fs/bpf:/sys/fs/bpf:shared"
 endif
 
-# --- k3d container disk-pressure tmpfs mounts (CI only) ---
-# Two big writer/reader paths inside the k3d container go on tmpfs to
-# avoid the shared CI runner's contended disk:
-#
-#   /var/log
-#       Kubelet writes pod stdout/stderr to /var/log/pods/<pod>/<container>.log
-#       for every container in the cluster (kuma-cp, calico-typha, felix,
-#       kuma-init streams). Largest attributable writer in cgroup-v2 io.stat
-#       (1.5-2.5 GB per suite).
-#
-#   /var/lib/containerd
-#       Image overlay snapshots and container task state. The freeze symptom
-#       is kuma-init running but emitting zero output - kuma-init's binary
-#       is mmap'd from /var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/
-#       so under disk contention, the FIRST page-fault to read the executable's
-#       text section blocks for minutes. This is the actual fix for the freeze;
-#       /var/log alone wasn't enough on the latest run, the freeze returned.
-#
-# The k3d container is ephemeral - we delete the cluster at suite end - so
-# loss-on-host-crash is irrelevant.
-#
-# Linux + CI only: /dev/shm specifics differ on Docker Desktop and developers
-# don't share host disks with noisy neighbours.
-#
-# /dev/shm sizing: ubuntu-24.04 GitHub-hosted runners have 16 GB RAM, default
-# /dev/shm is 50% = 8 GB. Multizone (2 clusters) consumes ~5 GB across these
-# mounts. Comfortable; we observed memory still 4-5 GB free at suite end.
-#
-# Note on kine: a previous revision also bind-mounted /var/lib/rancher/k3s/server/db
-# (kine SQLite) onto /dev/shm. That caused "rpc error: no such table: kine"
-# from the apiserver after about 10 minutes of operation across three
-# consecutive overnight runs - SQLite's mmap-based locking and WAL checkpoint
-# behaviour on tmpfs is not reliable for k3s's write pattern. Kine SQLite
-# stays on disk; it's not a major writer anyway.
-#
-# Deferred (=) so $(CLUSTER_NAME) resolves per-target at recipe time.
-K3D_VARLOG_TMPFS_DIR     = /dev/shm/k3d-$(CLUSTER_NAME)-varlog
-K3D_CONTAINERD_TMPFS_DIR = /dev/shm/k3d-$(CLUSTER_NAME)-containerd
-ifeq ($(GOOS),linux)
-ifeq ($(CI),true)
-K3D_CLUSTER_CREATE_OPTS += --volume "$(K3D_VARLOG_TMPFS_DIR):/var/log@server:0"
-K3D_CLUSTER_CREATE_OPTS += --volume "$(K3D_CONTAINERD_TMPFS_DIR):/var/lib/containerd@server:0"
-endif
-endif
-
 # --- k3d-specific context ---
 
 CLUSTER_KUBECONTEXT := k3d-$(CLUSTER_NAME)
@@ -326,9 +281,6 @@ K3D_CREATE_CLUSTER ?= $(KUMA_DIR)/mk/resources/k3d-create-cluster.sh
 
 .PHONY: k3d/cluster/create
 k3d/cluster/create: $(KUBECONFIG_DIR)
-ifeq ($(GOOS)$(CI),linuxtrue)
-	$(Q)mkdir -p "$(K3D_VARLOG_TMPFS_DIR)" "$(K3D_CONTAINERD_TMPFS_DIR)"
-endif
 	$(Q)$(K3D_CREATE_CLUSTER) \
 	  "$(DOCKER_NETWORK)" \
 	  "$(K3D_PORT_PREFIX_LOCK_DIR)" \
@@ -338,15 +290,6 @@ endif
 .PHONY: k3d/cluster/stop
 k3d/cluster/stop:
 	$(Q)$(K3D) cluster delete $(CLUSTER_NAME) && rm -f $(K3D_CLUSTER_KUBECONFIG)
-ifeq ($(GOOS)$(CI),linuxtrue)
-	@# Files inside the bind-mounted tmpfs dirs are written by k3s/kubelet/
-	@# containerd as root inside the k3d container (no user-namespace remap)
-	@# so they show up on the host as UID 0 and the runner user can't unlink
-	@# them. sudo is available passwordless on GH-hosted runners (and we use
-	@# it elsewhere - free-disk-space, sysctl, journald restart). Trailing
-	@# `|| true` keeps cleanup failures from masking real test results.
-	$(Q)sudo rm -rf "$(K3D_VARLOG_TMPFS_DIR)" "$(K3D_CONTAINERD_TMPFS_DIR)" || true
-endif
 
 # Orchestrated via sequential $(MAKE) calls to guarantee ordering under -j.
 .PHONY: k3d/cluster/start
