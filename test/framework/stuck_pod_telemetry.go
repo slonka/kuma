@@ -237,20 +237,56 @@ func collectNodeStuckPodSnapshot(pod *v1.Pod) []byte {
 	}
 
 	script := fmt.Sprintf(`POD_NAME=%q
+resolve_mapping_for_ip() {
+  pid="$1"
+  ip_hex="$2"
+  case "$ip_hex" in
+    0x*) ;;
+    *)
+      echo "instruction_pointer=unavailable ($ip_hex)"
+      return
+      ;;
+  esac
+  ip_value=$((16#${ip_hex#0x}))
+  while IFS= read -r line; do
+    set -- $line
+    [ $# -ge 5 ] || continue
+    range="$1"
+    perms="$2"
+    offset="$3"
+    dev="$4"
+    inode="$5"
+    shift 5 || true
+    mapping_path="$*"
+    start_hex="${range%%-*}"
+    end_hex="${range#*-}"
+    start_value=$((16#$start_hex))
+    end_value=$((16#$end_hex))
+    if [ "$ip_value" -ge "$start_value" ] && [ "$ip_value" -lt "$end_value" ]; then
+      echo "instruction_pointer=$ip_hex"
+      echo "mapping_range=$range perms=$perms offset=$offset dev=$dev inode=$inode"
+      echo "mapping_path=${mapping_path:-[anonymous]}"
+      return
+    fi
+  done < /proc/$pid/maps
+  echo "instruction_pointer=$ip_hex"
+  echo "mapping=not found"
+}
+
 echo "captured_at=%s"
 echo "pod=%s/%s node=%s"
 echo
 echo "=== crictl pods --name $POD_NAME ==="
-crictl pods -a --name "$POD_NAME" -o json 2>&1 || true
-POD_ID="$(crictl pods -a --name "$POD_NAME" -q 2>/dev/null | head -n 1)"
+crictl pods --name "$POD_NAME" -o json 2>&1 || true
+POD_ID="$(crictl pods --name "$POD_NAME" -q 2>/dev/null | head -n 1)"
 if [ -n "$POD_ID" ]; then
   echo
   echo "=== crictl inspectp $POD_ID ==="
   crictl inspectp "$POD_ID" 2>&1 || true
   echo
-  echo "=== crictl ps -a --pod $POD_ID ==="
-  crictl ps -a --pod "$POD_ID" -o json 2>&1 || true
-  CTR_ID="$(crictl ps -a --pod "$POD_ID" -q 2>/dev/null | head -n 1)"
+  echo "=== crictl ps --pod $POD_ID ==="
+  crictl ps --pod "$POD_ID" -o json 2>&1 || true
+  CTR_ID="$(crictl ps --pod "$POD_ID" -q 2>/dev/null | head -n 1)"
   if [ -n "$CTR_ID" ]; then
     echo
     echo "=== crictl inspect $CTR_ID ==="
@@ -270,6 +306,19 @@ for pid in $(ps -eo pid=,args= 2>/dev/null | grep -E 'kumactl install transparen
   echo
   echo "=== /proc/$pid/syscall ==="
   cat /proc/$pid/syscall 2>/dev/null || true
+  ip_hex="$(awk '{print $NF}' /proc/$pid/syscall 2>/dev/null)"
+  echo
+  echo "=== likely file-backed mapping for /proc/$pid/syscall instruction pointer ==="
+  resolve_mapping_for_ip "$pid" "$ip_hex"
+  echo
+  echo "=== /proc/$pid/exe ==="
+  readlink /proc/$pid/exe 2>/dev/null || true
+  echo
+  echo "=== /proc/$pid/cwd ==="
+  readlink /proc/$pid/cwd 2>/dev/null || true
+  echo
+  echo "=== /proc/$pid/root ==="
+  readlink /proc/$pid/root 2>/dev/null || true
   echo
   echo "=== /proc/$pid/status ==="
   cat /proc/$pid/status 2>/dev/null || true
@@ -282,6 +331,15 @@ for pid in $(ps -eo pid=,args= 2>/dev/null | grep -E 'kumactl install transparen
   echo
   echo "=== /proc/$pid/stack ==="
   cat /proc/$pid/stack 2>/dev/null || true
+  echo
+  echo "=== /proc/$pid/maps ==="
+  cat /proc/$pid/maps 2>/dev/null || true
+  echo
+  echo "=== /proc/$pid/mountinfo ==="
+  cat /proc/$pid/mountinfo 2>/dev/null || true
+  echo
+  echo "=== /proc/$pid/fd ==="
+  ls -l /proc/$pid/fd 2>/dev/null || true
 done
 echo
 echo "=== /proc/pressure/io ==="
