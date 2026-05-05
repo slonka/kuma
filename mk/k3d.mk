@@ -107,37 +107,32 @@ ifeq ($(GOOS),linux)
 K3D_CLUSTER_CREATE_OPTS += --volume "/sys/fs/bpf:/sys/fs/bpf:shared"
 endif
 
-# --- kine SQLite on tmpfs (CI only) ---
-# k3s stores its kine SQLite database at /var/lib/rancher/k3s/server/db/.
-# Every k8s API write fsyncs that file. Under disk contention on shared CI
-# runners (observed: IO PSI full avg10 = 30% during e2e runs while CPU PSI
-# stayed mild at 8-15%), each fsync stalls hundreds of ms, which backs up
-# into apiserver write paths and wedges container init via kubelet -> apiserver
-# -> kine. Bind-mounting the db/ directory onto /dev/shm (tmpfs) eliminates
-# fsync latency entirely. The data is intentionally ephemeral - we delete the
-# k3d cluster at suite end - so loss-on-host-crash is irrelevant.
-#
-# Linux + CI only: /dev/shm specifics differ on Docker Desktop, and developers
-# benefit less from this since their disks aren't on shared GH runners.
-# Deferred (=) so $(CLUSTER_NAME) resolves per-target at recipe time.
-K3D_KINE_TMPFS_DIR   = /dev/shm/k3d-$(CLUSTER_NAME)-kine
-K3D_VARLOG_TMPFS_DIR = /dev/shm/k3d-$(CLUSTER_NAME)-varlog
-ifeq ($(GOOS),linux)
-ifeq ($(CI),true)
-K3D_CLUSTER_CREATE_OPTS += --volume "$(K3D_KINE_TMPFS_DIR):/var/lib/rancher/k3s/server/db@server:0"
-# /var/log inside the k3d container is the largest *attributable* writer
+# --- /var/log on tmpfs (CI only) ---
+# /var/log inside the k3d container is the largest attributable writer
 # category observed in cgroup-v2 io.stat: kubelet writes pod stdout/stderr
 # to /var/log/pods/<pod>/<container>.log for every container in the cluster
 # (kuma-cp, calico-typha, felix, kuma-init streams). The k3d-server-0
 # container's blkio scope was 1.5-2.5 GB per suite across the matrix,
-# dwarfing journald, kine and dockerd's own writes. Tmpfs-back it.
+# dwarfing journald and dockerd's own writes. Bind-mounting /var/log onto
+# /dev/shm (tmpfs) takes that traffic off the shared host disk. The data
+# is intentionally ephemeral - we delete the k3d cluster at suite end -
+# so loss-on-host-crash is irrelevant.
+#
+# Linux + CI only: /dev/shm specifics differ on Docker Desktop and
+# developers don't share host disks with noisy neighbours.
+#
+# Deferred (=) so $(CLUSTER_NAME) resolves per-target at recipe time.
+K3D_VARLOG_TMPFS_DIR = /dev/shm/k3d-$(CLUSTER_NAME)-varlog
+ifeq ($(GOOS),linux)
+ifeq ($(CI),true)
 K3D_CLUSTER_CREATE_OPTS += --volume "$(K3D_VARLOG_TMPFS_DIR):/var/log@server:0"
-# Note: an earlier revision also tmpfs'd /var/lib/containerd. That filled
-# /dev/shm to capacity on multizone runs (2 clusters x ~2 GB image layers
-# unpacked into containerd snapshots, plus the other tmpfs mounts here),
-# which corrupted kine's SQLite mid-transaction and surfaced as
-# "rpc error: no such table: kine" from the apiserver after ~10 minutes.
-# Image layers stay on disk; the win from /var/log alone is enough.
+# Note: previous revisions also tmpfs'd /var/lib/rancher/k3s/server/db
+# (kine SQLite) and /var/lib/containerd (image overlay snapshots). Both
+# were reverted: containerd filled /dev/shm to capacity on multizone runs;
+# kine on tmpfs caused "rpc error: no such table: kine" from the apiserver
+# after ~9-10 minutes of operation in three consecutive overnight runs,
+# even with the size pressure removed - SQLite's mmap-based locking and
+# WAL checkpoint behaviour on tmpfs is unreliable for k3s's write pattern.
 endif
 endif
 
@@ -316,7 +311,7 @@ K3D_CREATE_CLUSTER ?= $(KUMA_DIR)/mk/resources/k3d-create-cluster.sh
 .PHONY: k3d/cluster/create
 k3d/cluster/create: $(KUBECONFIG_DIR)
 ifeq ($(GOOS)$(CI),linuxtrue)
-	$(Q)mkdir -p "$(K3D_KINE_TMPFS_DIR)" "$(K3D_VARLOG_TMPFS_DIR)"
+	$(Q)mkdir -p "$(K3D_VARLOG_TMPFS_DIR)"
 endif
 	$(Q)$(K3D_CREATE_CLUSTER) \
 	  "$(DOCKER_NETWORK)" \
@@ -334,7 +329,7 @@ ifeq ($(GOOS)$(CI),linuxtrue)
 	@# them. sudo is available passwordless on GH-hosted runners (and we use
 	@# it elsewhere - free-disk-space, sysctl, journald restart). Trailing
 	@# `|| true` keeps cleanup failures from masking real test results.
-	$(Q)sudo rm -rf "$(K3D_KINE_TMPFS_DIR)" "$(K3D_VARLOG_TMPFS_DIR)" || true
+	$(Q)sudo rm -rf "$(K3D_VARLOG_TMPFS_DIR)" || true
 endif
 
 # Orchestrated via sequential $(MAKE) calls to guarantee ordering under -j.
