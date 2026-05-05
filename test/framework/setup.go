@@ -561,7 +561,7 @@ func WaitPodsAvailableWithLabel(namespace, labelKey, labelValue string) InstallF
 		var podError error
 		for _, p := range pods {
 			pod := p
-			podError = k8s.WaitUntilPodAvailableE(testingT, kubectlOptions, pod.GetName(), ck8s.defaultRetries, ck8s.defaultTimeout)
+			podError = WaitUntilPodAvailableWithTelemetryE(testingT, kubectlOptions, pod.GetName(), ck8s.defaultRetries, ck8s.defaultTimeout)
 			if podError != nil {
 				podDetails := ExtractPodDetails(testingT, c.GetKubectlOptions(namespace), pod.Name)
 				return &K8sDecoratedError{Err: podError, Details: podDetails}

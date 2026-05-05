@@ -192,12 +192,7 @@ func ExtractDeploymentDetails(testingT testing.TestingT,
 		deployDetails.RetrievalError = err
 	}
 	for i := range pods {
-		deployDetails.Pods = append(deployDetails.Pods, &ObjectDetails{
-			Name:       pods[i].Name,
-			Conditions: fromPodCondition(pods[i].Status.Conditions),
-			Events:     getObjectEvents(testingT, kubectlOptions, "Pod", pods[i].Name),
-			Logs:       getPodLogs(testingT, kubectlOptions, &pods[i]),
-		})
+		deployDetails.Pods = append(deployDetails.Pods, newPodDetails(testingT, kubectlOptions, &pods[i]))
 	}
 	return &deployDetails
 }
@@ -210,28 +205,62 @@ func ExtractPodDetails(testingT testing.TestingT,
 		// might not be a Pod, let's ignore it
 		return &ObjectDetails{RetrievalError: err}
 	}
+	return newPodDetails(testingT, kubectlOptions, podObject)
+}
+
+func newPodDetails(
+	testingT testing.TestingT,
+	kubectlOptions *k8s.KubectlOptions,
+	podObject *v1.Pod,
+) *ObjectDetails {
 	return &ObjectDetails{
-		Name:       podObject.Name,
-		Namespace:  kubectlOptions.Namespace,
-		Kind:       "Pod",
-		Conditions: fromPodCondition(podObject.Status.Conditions),
-		Events:     getObjectEvents(testingT, kubectlOptions, "Pod", podObject.Name),
-		Phase:      string(podObject.Status.Phase),
-		Logs:       getPodLogs(testingT, kubectlOptions, podObject),
+		Name:               podObject.Name,
+		Namespace:          podObject.Namespace,
+		Kind:               "Pod",
+		NodeName:           podObject.Spec.NodeName,
+		Conditions:         fromPodCondition(podObject.Status.Conditions),
+		Events:             getObjectEvents(testingT, kubectlOptions, "Pod", podObject.Name),
+		Phase:              string(podObject.Status.Phase),
+		Logs:               getPodLogs(testingT, kubectlOptions, podObject),
+		InitContainers:     fromContainerStatuses(podObject.Status.InitContainerStatuses),
+		Containers:         fromContainerStatuses(podObject.Status.ContainerStatuses),
+		TriggeredTelemetry: captureStuckPodTelemetry(testingT, kubectlOptions, podObject),
 	}
 }
 
 type ObjectDetails struct {
-	RetrievalError error              `json:"retrievalError,omitempty"`
-	Kind           string             `json:"kind,omitempty"`
-	Namespace      string             `json:"namespace,omitempty"`
-	Name           string             `json:"name,omitempty"`
-	Phase          string             `json:"phase,omitempty"`
-	Logs           map[string]string  `json:"logs,omitempty"`
-	Conditions     []*objectCondition `json:"conditions,omitempty"`
-	Events         []*simplifiedEvent `json:"events,omitempty"`
-	ReplicaSets    []*ObjectDetails   `json:"replicaSets,omitempty"`
-	Pods           []*ObjectDetails   `json:"pods,omitempty"`
+	RetrievalError     error              `json:"retrievalError,omitempty"`
+	Kind               string             `json:"kind,omitempty"`
+	Namespace          string             `json:"namespace,omitempty"`
+	Name               string             `json:"name,omitempty"`
+	NodeName           string             `json:"nodeName,omitempty"`
+	Phase              string             `json:"phase,omitempty"`
+	Logs               map[string]string  `json:"logs,omitempty"`
+	Conditions         []*objectCondition `json:"conditions,omitempty"`
+	InitContainers     []*containerStatus `json:"initContainers,omitempty"`
+	Containers         []*containerStatus `json:"containers,omitempty"`
+	TriggeredTelemetry []string           `json:"triggeredTelemetry,omitempty"`
+	Events             []*simplifiedEvent `json:"events,omitempty"`
+	ReplicaSets        []*ObjectDetails   `json:"replicaSets,omitempty"`
+	Pods               []*ObjectDetails   `json:"pods,omitempty"`
+}
+
+type containerStatus struct {
+	Name         string                 `json:"name"`
+	Ready        bool                   `json:"ready"`
+	RestartCount int32                  `json:"restartCount"`
+	State        *containerStateDetails `json:"state,omitempty"`
+	LastState    *containerStateDetails `json:"lastState,omitempty"`
+}
+
+type containerStateDetails struct {
+	Type       string `json:"type"`
+	Reason     string `json:"reason,omitempty"`
+	Message    string `json:"message,omitempty"`
+	StartedAt  string `json:"startedAt,omitempty"`
+	FinishedAt string `json:"finishedAt,omitempty"`
+	ExitCode   int32  `json:"exitCode,omitempty"`
+	Signal     int32  `json:"signal,omitempty"`
 }
 
 type objectCondition struct {
@@ -256,6 +285,52 @@ type simplifiedEvent struct {
 	Object   string `json:"object,omitempty"`
 	Reason   string `json:"reason,omitempty"`
 	Message  string `json:"message,omitempty"`
+}
+
+func fromContainerStatuses(statuses []v1.ContainerStatus) []*containerStatus {
+	result := make([]*containerStatus, 0, len(statuses))
+	for _, status := range statuses {
+		result = append(result, &containerStatus{
+			Name:         status.Name,
+			Ready:        status.Ready,
+			RestartCount: status.RestartCount,
+			State:        fromContainerState(status.State),
+			LastState:    fromContainerState(status.LastTerminationState),
+		})
+	}
+	return result
+}
+
+func fromContainerState(state v1.ContainerState) *containerStateDetails {
+	switch {
+	case state.Waiting != nil:
+		return &containerStateDetails{
+			Type:    "Waiting",
+			Reason:  state.Waiting.Reason,
+			Message: state.Waiting.Message,
+		}
+	case state.Running != nil:
+		return &containerStateDetails{Type: "Running", StartedAt: formatTime(state.Running.StartedAt.Time)}
+	case state.Terminated != nil:
+		return &containerStateDetails{
+			Type:       "Terminated",
+			Reason:     state.Terminated.Reason,
+			Message:    state.Terminated.Message,
+			StartedAt:  formatTime(state.Terminated.StartedAt.Time),
+			FinishedAt: formatTime(state.Terminated.FinishedAt.Time),
+			ExitCode:   state.Terminated.ExitCode,
+			Signal:     state.Terminated.Signal,
+		}
+	default:
+		return nil
+	}
+}
+
+func formatTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format(time.RFC3339Nano)
 }
 
 func getObjectEvents(testingT testing.TestingT, kubectlOptions *k8s.KubectlOptions, kind string, name string) []*simplifiedEvent {

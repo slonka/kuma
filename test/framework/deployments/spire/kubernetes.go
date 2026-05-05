@@ -100,7 +100,7 @@ func (t *k8sDeployment) isPodReady(cluster framework.Cluster, selector string) e
 	}
 
 	for _, pod := range pods {
-		if err := k8s.WaitUntilPodAvailableE(cluster.GetTesting(),
+		if err := framework.WaitUntilPodAvailableWithTelemetryE(cluster.GetTesting(),
 			cluster.GetKubectlOptions(t.namespace),
 			pod.Name,
 			framework.DefaultRetries*3, // spire is fetched from the internet. Increase the timeout to prevent long downloads of images.
